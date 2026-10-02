@@ -4,6 +4,8 @@ Contractor time tracking through iMessage, with a live timesheet linked to assig
 
 ![Plow Hours timesheet with the original Plow logo](docs/images/timesheet-desktop.png)
 
+[Watch the recorded timesheet demo](https://github.com/EnzoTironi/plow-hours/releases/download/v1/timesheet-demo.webm).
+
 Each contractor has a normal iMessage group with the owner and the agent. They
 send `comecei <demand-id>` and `parei <details>`. Plow Hours saves the original
 message timestamp before confirming, without waiting for a model or connected
