@@ -1,0 +1,22 @@
+services:
+  agent:
+    build: .
+    image: ghcr.io/enzotironi/plow-hours:v1
+    env_file: ./plow-credentials
+    environment:
+      AGENT_ID: plow-hours
+      AGENT_NAME: Plow Hours
+      AGENT_BLURB: Contractor time tracking through iMessage, with a live timesheet linked to assigned work.
+    ports:
+      - "127.0.0.1:3331:3001"
+    volumes:
+      - state:/var/lib/plow
+    stop_grace_period: 35s
+  dashboard:
+    image: caddy:2@sha256:14a9c00d4e833ebc2b65d36515b37bde3b73f0b323a2663aaafc88953d8c4e3f
+    network_mode: service:agent
+    depends_on: [agent]
+    volumes:
+      - ./dev/Caddyfile:/etc/caddy/Caddyfile:ro
+volumes:
+  state:
