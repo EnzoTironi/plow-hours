@@ -128,6 +128,10 @@ config=replaceOnce(config,'"plow_send_email"]','"plow_send_email", ...(process.e
 config=replaceOnce(config,'"automations", "read", "write", "edit", "exec",', '"automations",');
 config=replaceOnce(config,'deny: ["ask_user"]', 'deny: ["ask_user", "exec", "read", "write", "edit", "apply_patch"]');
 await writeFile('/opt/plow/boot/config.ts',config);
+let main=await readFile('/opt/plow/boot/main.js','utf8');
+main='import { startHoursBackups } from "../hours-source/backup.mjs";\n'+main;
+main=replaceOnce(main,'  startAgentIndex(300_000, writeLog);', '  startHoursBackups();\n  startAgentIndex(300_000, writeLog);');
+await writeFile('/opt/plow/boot/main.js',main);
 
 for (const [source,destination] of [
   [plugin+'/index.ts',plugin+'/dist/index.js'],
@@ -144,3 +148,4 @@ for (const [source,destination] of [
 }
 await cp(plugin+'/hours-web',plugin+'/dist/hours-web',{recursive:true});
 await writeFile('/opt/plow/probe','#!/usr/bin/env node\nimport "./hours-source/probe.mjs";\n',{mode:0o755});
+await writeFile('/opt/plow/hours-backup','#!/usr/bin/env node\nimport { runBackupCli } from "./hours-source/backup.mjs";\nawait runBackupCli(process.argv.slice(2));\n',{mode:0o755});
