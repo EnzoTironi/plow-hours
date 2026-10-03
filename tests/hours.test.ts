@@ -40,6 +40,31 @@ test("original message timestamps produce the requested seven columns and surviv
   assert.match(result.wiki.markdown, /Recorded hours: 2.5/);
 });
 
+test("a pending model message survives restart with its original source, rate and timezone", t => {
+  const f = fixture(t);
+  const first = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "offline",
+    body: "Started the landing page.", created_at: "2026-10-02T09:00:00-03:00" };
+  assert.equal(f.ledger.clockAttempt(first), 1);
+  f.ledger.manage({ ...f.contractor, rate_cents: 4000, timezone: "UTC" }, "changed-offline-rate");
+  f.restart();
+  assert.deepEqual(f.ledger.pendingClockMessages("line", "cht_ana"), [first]);
+  assert.deepEqual(f.ledger.pendingClockMessages("another-line", "cht_ana"), []);
+  assert.deepEqual(f.ledger.pendingClockMessages("line", "another-group"), []);
+  assert.equal(f.ledger.clockAttempt({ ...first, body: "Changed body" }), 2);
+  const response = f.ledger.clock(first, { kind: "start", detail: "landing" });
+  const entry = f.snapshot().open_entry;
+  assert.ok(entry);
+  assert.equal(entry.start_ms, Date.parse(first.created_at));
+  assert.equal(entry.rate_cents, 3000);
+  assert.equal(entry.timezone, "America/Sao_Paulo");
+  assert.equal(f.ledger.clockReceipt(first), response);
+  assert.equal(f.snapshot().entries.length, 1);
+  f.ledger.completeClockMessage("line", "cht_ana", first.message_uid);
+  f.restart();
+  assert.equal(f.ledger.isPendingClockMessage("line", "cht_ana", first.message_uid), false);
+  assert.deepEqual(f.ledger.pendingClockMessages("line", "cht_ana"), []);
+});
+
 test("a clarified start retains its first message time, rate and timezone across restarts", t => {
   const f = fixture(t);
   const first = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "ambiguous",
@@ -95,6 +120,24 @@ test("message replay is idempotent across restarts and source identity includes 
   f.clock("/out", "2026-10-02T13:00:00Z", { message_uid: "end" });
   f.clock("/out", "2026-10-02T13:00:00Z", { message_uid: "end" });
   assert.equal(f.snapshot().total_hours, 1);
+});
+
+test("a committed natural clock can be recovered without rerunning the model, and failure notices deduplicate", t => {
+  const f = fixture(t);
+  const message = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "natural-start",
+    body: "Starting the landing page now.", created_at: "2026-10-02T09:00:00-03:00" };
+  assert.equal(f.ledger.clockReceipt(message), undefined);
+  assert.equal(f.ledger.claimFailureNotice(message), true);
+  f.restart();
+  assert.equal(f.ledger.claimFailureNotice(message), false);
+  assert.equal(f.ledger.clockReceipt(message), undefined, "an outage notice never substitutes for a clock receipt");
+  const confirmation = f.ledger.clock(message, { kind: "start", detail: "landing" });
+  f.restart();
+  assert.equal(f.ledger.clockReceipt(message), confirmation);
+  assert.equal(f.ledger.clockReceipt({ ...message, handle: "+15550000003" }), undefined);
+  assert.equal(f.ledger.clockReceipt({ ...message, chat_uid: "cht_other" }), undefined);
+  assert.equal(f.ledger.clockReceipt({ ...message, line_uid: "other-line" }), undefined);
+  assert.equal(f.snapshot().entries.length, 1);
 });
 
 test("only a registered sender in their registered thread can clock assigned demands", t => {
