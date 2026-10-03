@@ -13,7 +13,7 @@ export function hoursWebSnapshot(ledger: HoursLedger) {
         id: contractor.id, name: contractor.name, timezone: contractor.timezone, rate_usd: contractor.rate_cents / 100,
         demands: demands.map(({ id, project, summary, references }) => ({ id, project, summary, references })),
         active: Boolean(contractor.active), review_needed: entries.some(needsReview) || pending_clock.reviews.length > 0,
-        billing: (() => { const r = ledger.billingReport(contractor.id); return { requested: r.requested, closed: r.closed, approved: r.approved, ready_for_owner_review: r.ready_for_owner_review, discrepancy_cents: r.discrepancy_cents, expected: r.expected ? { currency: r.expected.currency, amount_cents: r.expected.expected_amount_cents, total_hours: r.expected.total_hours } : null }; })(),
+        billing: (() => { const r = ledger.billingReport(contractor.id); return { requested: r.requested, closed: r.closed, approved: r.approved, ready_for_owner_review: r.ready_for_owner_review, unresolved_clocks: Boolean(r.unresolved_clocks), discrepancy_cents: r.discrepancy_cents, expected: r.expected ? { currency: r.expected.currency, amount_cents: r.expected.expected_amount_cents, total_hours: r.expected.total_hours } : null }; })(),
         entries: entries.filter(entry => !entry.voided).map(entry => {
           const demand = demands.find(item => item.id === entry.demand_id);
           if (!demand) throw new Error("Time entry has no demand.");
