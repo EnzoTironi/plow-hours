@@ -2,7 +2,7 @@
 
 Contractor time tracking through iMessage, with a live timesheet linked to assigned work.
 
-[Watch the demo and review the release evidence](https://github.com/EnzoTironi/plow-hours/releases/tag/v3).
+[Watch the demo and review the release evidence](https://github.com/EnzoTironi/plow-hours/releases/tag/v4).
 
 Each contractor has a normal iMessage group with the owner and the agent. They
 say things like "I’m starting the landing page now", "taking a break" and
@@ -138,14 +138,14 @@ docker run --rm --user root --network none \
   -v "$PWD/node_modules:/opt/plow/node_modules:ro" \
   -v "$PWD/tests:/opt/plow/tests:ro" plow-hours:test sh -c \
   '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test --test-timeout=180000 /opt/plow/tests/*.test.ts'
-plow-agents image build ghcr.io/enzotironi/plow-hours:v3
-plow-agents image push ghcr.io/enzotironi/plow-hours:v3
+plow-agents image build ghcr.io/enzotironi/plow-hours:v4
+plow-agents image push ghcr.io/enzotironi/plow-hours:v4
 plow-agents profile --show
 ```
 
 Make the GHCR package public. Use the digest printed by push, your Plow account
 UID and `plow-hours` for the admin's initial one-click admission. Once admitted,
-updates use `plow-agents image push ghcr.io/enzotironi/plow-hours:v4 --promote plow-hours`.
+updates use `plow-agents image push ghcr.io/enzotironi/plow-hours:v5 --promote plow-hours`.
 Follow the [Agent Index publishing guide](https://aiworthusing.com/agent-index/publish)
 for media registration and WIP review.
 
