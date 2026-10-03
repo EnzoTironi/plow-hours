@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import { HoursLedger } from "../plugin/hours.ts";
 import { renderConfig } from "../boot/config.ts";
 import { probeIdentity } from "../boot/probe-fixture.ts";
+import { identityFromApi } from "../boot/identity.ts";
 
 test("CEO spec: the installed OpenClaw variant exposes Plow Hours, its owner tool and its operating skill", () => {
   const cfg = renderConfig(probeIdentity, "http://127.0.0.1:1");
@@ -21,10 +22,35 @@ test("boot rejects a different volume owner or line and generic shell/file tools
   for (const tool of ["exec", "read", "write", "edit", "apply_patch"]) assert.ok(cfg.tools.deny.includes(tool));
   assert.deepEqual(cfg.gateway.auth.trustedProxy.allowUsers, ["mem_probe"]);
   const wrongOwner = structuredClone(probeIdentity);
-  for (const chat of wrongOwner.chats) for (const participant of chat.participants)
-    if (participant.type === "member" && participant.role === "owner") participant.uid = "other-owner";
+  wrongOwner.owner_uid = "other-owner";
   assert.throws(() => renderConfig(wrongOwner, "http://127.0.0.1:1"), /different Plow owner or line/);
   assert.throws(() => renderConfig({ ...probeIdentity, line: { uid: "different-line" } }, "http://127.0.0.1:1"), /different Plow owner or line/);
+});
+
+test("boot binds the authenticated account owner, independently of per-chat participant IDs", async t => {
+  const identities = structuredClone(probeIdentity);
+  identities.chats.push({ ...identities.chats[0]!, uid: "cht_group", participants: [
+    { type: "agent", relationship: "self", line: identities.line },
+    { type: "member", uid: "different-group-participant", role: "owner" },
+  ] });
+  const requests: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    requests.push(url);
+    assert.equal(new Headers(init.headers).get("authorization"), "Bearer fixture-agent-token");
+    return Response.json(url.endsWith("/auth/owner-uid") ? { owner_uid: "mem_probe" } : identities);
+  });
+  const identity = await identityFromApi("http://127.0.0.1:1", "fixture-agent-token");
+  assert.equal(identity.owner_uid, "mem_probe");
+  assert.deepEqual(requests, ["http://127.0.0.1:1/v1/agents/me", "http://127.0.0.1:1/v1/auth/owner-uid"]);
+  assert.deepEqual(renderConfig(identity, "http://127.0.0.1:1").gateway.auth.trustedProxy.allowUsers, ["mem_probe"]);
+});
+
+test("boot refuses missing or unavailable account owner identity without trusting a chat participant", async t => {
+  assert.throws(() => renderConfig({ ...probeIdentity, owner_uid: undefined }, "http://127.0.0.1:1"), /authenticated account owner/);
+  for (const response of [Response.json({}), Response.json({}, { status: 403 })]) {
+    t.mock.method(globalThis, "fetch", async (url: string) => url.endsWith("/agents/me") ? Response.json(probeIdentity) : response);
+    await assert.rejects(() => identityFromApi("http://127.0.0.1:1", "fixture-agent-token"), /Owner identity/);
+  }
 });
 
 function fixture(t: TestContext) {

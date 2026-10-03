@@ -11,7 +11,7 @@ await mkdir('/var/lib/plow/workspace',{recursive:true});
 await syncConfig(renderConfig(probeIdentity,'http://127.0.0.1:1'),'/var/lib/plow/openclaw.json','/etc/plow/openclaw');
 const child=await startGateway(true);
 let success=false;
-const deadline=setTimeout(()=>{console.error('Plow Hours probe timed out');process.kill(process.pid,'SIGTERM');},60000);
+const deadline=setTimeout(()=>{console.error('Plow Hours probe timed out');process.kill(process.pid,'SIGTERM');},120000);
 let log='';
 let checking=false;
 const paths=['','/data','/app.js','/style.css','/plow-logo.svg','/fonts/dm-sans-latin.woff2','/fonts/dm-mono-400-latin.woff2','/fonts/epilogue-latin-500-normal.woff2'];

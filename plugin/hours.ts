@@ -154,6 +154,11 @@ export class HoursLedger {
     });
   }
 
+  assertInstallationLine(lineUid: string) {
+    const current = this.db.prepare("SELECT line_uid FROM installation WHERE singleton=1").get();
+    if (!current || current.line_uid !== lineUid) throw new Error("This hours volume must boot with its authenticated Plow owner and line before accepting messages.");
+  }
+
   groupContractor(chatUid: string) {
     const row = this.db.prepare("SELECT * FROM contractors WHERE chat_uid = ? AND active=1").get(chatUid);
     return row ? contractorSchema.parse(row) : undefined;

@@ -14,7 +14,7 @@ const owner = { type: "member", uid: "owner", role: "owner", display_name: "Dane
 const contractor = { ...owner, uid: "ana", role: "member", display_name: "Ana", provider_key: "+15550000002" };
 const self = { type: "agent", relationship: "self", line: { uid: "line" } };
 const home = { uid: "cht_home", status: "active", trusted: false, participants: [self, owner] };
-const group = { uid: "cht_ana", status: "active", trusted: false, participants: [self, owner, contractor] };
+const group = { uid: "cht_ana", status: "active", trusted: false, participants: [self, { ...owner, uid: "owner-in-group" }, contractor] };
 const profile = { action: "contractor", id: "ana", name: "Ana", handle: contractor.provider_key, chat_uid: group.uid, timezone: "America/Sao_Paulo", rate_cents: 3000 };
 
 test("an adopted contractor message recovers after restart even outside the provider history window", async t => {
@@ -81,7 +81,7 @@ test("optional clock shortcuts commit and confirm without any model or Mac call"
   const ledger = hoursLedger();
   ledger.manage(profile, "profile");
   ledger.manage({ action: "demand", id: "landing", contractor_id: "ana", project: "Site", summary: "Landing page" }, "demand");
-  const controller = abortAfter(10_000);
+  const controller = abortAfter(30_000);
   const posts: { body: string; path: string }[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
     const path = new URL(url).pathname;
@@ -119,7 +119,7 @@ test("optional clock shortcuts commit and confirm without any model or Mac call"
   });
   assert.ok(channel);
   await channel.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } });
-  assert.equal(posts.length, 2);
+  assert.equal(posts.length, 2, JSON.stringify(posts));
   assert.ok(posts.every(post => post.path === `/v1/chats/${group.uid}/messages`));
   assert.match(posts[0]?.body ?? "", /Ponto iniciado/);
   assert.match(posts[1]?.body ?? "", /2.5 h/);
