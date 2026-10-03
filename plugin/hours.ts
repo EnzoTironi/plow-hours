@@ -9,6 +9,12 @@ export const hoursEnabled = () => process.env.PLOW_HOURS === "1";
 const id = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
 const text = z.string().trim().min(1).max(2000);
 const timestamp = z.iso.datetime({ offset: true });
+export const clockSourceSchema = z.object({ line_uid: z.string().min(1), chat_uid: z.string().min(1),
+  handle: z.string().min(1), message_uid: z.string().min(1), created_at: timestamp, body: z.string() }).strict();
+type ClockSource = z.infer<typeof clockSourceSchema>;
+type StartIntent = { kind: "start"; detail: string } | { kind: "confirm_start"; detail: string }
+  | { kind: "clarify_start" } | { kind: "cancel_start" };
+export type ClockIntent = NonNullable<ReturnType<typeof clockCommand>> | StartIntent;
 const contractorSchema = z.object({
   id, name: text, handle: text, chat_uid: text, timezone: text,
   rate_cents: z.number().int().min(0).max(100_000_000),
@@ -99,6 +105,10 @@ export class HoursLedger {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS one_open_entry ON entries(contractor_id) WHERE end_ms IS NULL;
       CREATE TABLE IF NOT EXISTS receipts (source TEXT PRIMARY KEY, response TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS pending_starts (
+        contractor_id TEXT PRIMARY KEY REFERENCES contractors(id), source_json TEXT NOT NULL,
+        rate_cents INTEGER NOT NULL, timezone TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY, source TEXT NOT NULL, action TEXT NOT NULL, before_json TEXT, after_json TEXT NOT NULL);
     `);
     this.billing = new HoursBilling(this.db);
@@ -119,15 +129,17 @@ export class HoursLedger {
   self(raw: unknown, contractorId: string, source: string) {
     const input = selfSchema.parse(raw);
     this.contractor(contractorId);
-    if (input.action === "start" || input.action === "stop") throw new Error("Clock actions require a verified inbound contractor message.");
+    if (input.action === "start" || input.action === "stop" || input.action === "clarify_start" || input.action === "confirm_start"
+      || input.action === "cancel_start") throw new Error("Clock actions require a verified inbound contractor message.");
     if (input.action === "report") {
       const report = this.report(contractorId)[0];
       if (!report) throw new Error("Contractor is not registered.");
       return { contractor: { id: report.contractor.id, name: report.contractor.name, timezone: report.contractor.timezone },
         demands: report.demands, total_hours: report.total_hours,
+        pending_start: this.pendingStart(contractorId)?.source.created_at ?? null,
         clock_commands: { start: report.demands.map(demand => `comecei ${demand.id}`), stop: "parei <optional details>", status: "ponto",
           historical_changes: "Only the owner can correct exact past timestamps in the private DM." },
-        clock_language: "Natural language is supported: identify the assigned demand, then use start or stop. Ambiguous, future, negative or historical statements must not change the clock.",
+        clock_language: "Use start for clear work beginning now. If beginning now is clear but the assigned work is unclear, use clarify_start before asking. Use confirm_start to resolve that saved start, or cancel_start to withdraw it. Never clock uncertain intent, plans, questions, negations or historical statements.",
         entries: report.entries.map(({ demand_id, start_ms, end_ms, details }) => ({ demand_id, start_ms, end_ms, details })),
         billing: this.billingReport(contractorId) };
     }
@@ -179,7 +191,49 @@ export class HoursLedger {
       AND start_ms < ? AND (end_ms IS NULL OR end_ms > ?)`).get(contractorId, except, end ?? Number.MAX_SAFE_INTEGER, start);
   }
 
-  clock(input: { line_uid: string; chat_uid: string; handle: string; message_uid: string; created_at: string; body: string }, intent?: NonNullable<ReturnType<typeof clockCommand>>): string | undefined {
+  private pendingStart(contractorId: string) {
+    const row = this.db.prepare("SELECT source_json, rate_cents, timezone FROM pending_starts WHERE contractor_id = ?").get(contractorId);
+    if (!row) return undefined;
+    const pending = z.object({ source_json: z.string(), rate_cents: z.number().int(), timezone: z.string() }).parse(row);
+    return { source: clockSourceSchema.parse(JSON.parse(pending.source_json)), rate_cents: pending.rate_cents, timezone: pending.timezone };
+  }
+
+  private startClock(contractor: Contractor, input: ClockSource, command: StartIntent): string {
+    const active = this.open(contractor.id);
+    if (active) return `Seu ponto já está aberto na demanda ${active.demand_id}. Envie parei antes de iniciar outro.`;
+    if (command.kind === "cancel_start") {
+      this.db.prepare("DELETE FROM pending_starts WHERE contractor_id = ?").run(contractor.id);
+      return "Início pendente cancelado. Nenhuma hora foi registrada.";
+    }
+    const pending = this.pendingStart(contractor.id);
+    if (command.kind === "clarify_start") {
+      if (!pending) this.db.prepare("INSERT INTO pending_starts(contractor_id, source_json, rate_cents, timezone) VALUES (?, ?, ?, ?)")
+        .run(contractor.id, JSON.stringify(input), contractor.rate_cents, contractor.timezone);
+      const start = pending?.source.created_at ?? input.created_at;
+      return `Recebi seu início às ${localTime(Date.parse(start), pending?.timezone ?? contractor.timezone)}. Qual demanda você está fazendo? Vou manter esse horário quando você confirmar.`;
+    }
+    if (command.kind === "confirm_start" && (!pending || pending.source.line_uid !== input.line_uid
+      || pending.source.chat_uid !== input.chat_uid || normalizeHandle(pending.source.handle) !== normalizeHandle(input.handle))) {
+      return "Não há um início pendente desta conversa para confirmar. Me diga quando começar uma demanda.";
+    }
+    const origin = command.kind === "confirm_start" && pending ? pending : { source: input, rate_cents: contractor.rate_cents, timezone: contractor.timezone };
+    const ms = Date.parse(origin.source.created_at);
+    if (ms > Date.parse(input.created_at)) return "A confirmação veio antes do início pendente. O dono precisa revisar o horário.";
+    const demand = this.db.prepare("SELECT id FROM demands WHERE id = ? AND contractor_id = ?").get(command.detail, contractor.id);
+    if (!demand) return "Qual demanda? Envie comecei <id de uma demanda cadastrada para você>.";
+    const source = JSON.stringify([origin.source.line_uid, origin.source.chat_uid, origin.source.message_uid]);
+    if (this.overlaps(contractor.id, ms, null, source)) return "Esse horário cruza um ponto existente. Dane precisa revisar o histórico antes de registrar.";
+    this.db.prepare("INSERT INTO entries(id, contractor_id, demand_id, start_ms, rate_cents, timezone, start_message) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(`hours_${createHash("sha256").update(source).digest("hex").slice(0,24)}`, contractor.id, command.detail, ms, origin.rate_cents, origin.timezone, source);
+    this.db.prepare("DELETE FROM pending_starts WHERE contractor_id = ?").run(contractor.id);
+    this.bump(contractor.id);
+    this.audit(source, "start", undefined, { contractor_id: contractor.id, demand_id: command.detail, start_ms: ms });
+    const response = `Ponto iniciado às ${localTime(ms, origin.timezone)}, demanda ${command.detail}. Envie parei quando terminar.`;
+    if (command.kind === "confirm_start") this.db.prepare("UPDATE receipts SET response = ? WHERE source = ?").run(response, source);
+    return response;
+  }
+
+  clock(input: ClockSource, intent?: ClockIntent): string | undefined {
     const command = intent ?? clockCommand(input.body);
     if (!command) return undefined;
     // A registration is a narrow grant for this sender in this thread, independent of room trust.
@@ -197,18 +251,8 @@ export class HoursLedger {
       if (command.kind === "status") {
         response = active ? `Ponto aberto desde ${localTime(active.start_ms, active.timezone)}, demanda ${active.demand_id}.`
           : "Nenhum ponto aberto. Para começar, envie: comecei <demanda>.";
-      } else if (command.kind === "start") {
-        const demand = this.db.prepare("SELECT * FROM demands WHERE id = ? AND contractor_id = ?").get(command.detail, contractor.id);
-        if (active) response = `Seu ponto já está aberto na demanda ${active.demand_id}. Envie parei antes de iniciar outro.`;
-        else if (!demand) response = "Qual demanda? Envie comecei <id de uma demanda cadastrada para você>.";
-        else if (this.overlaps(contractor.id, ms, null, source)) response = "Esse horário cruza um ponto existente. Dane precisa revisar o histórico antes de registrar.";
-        else {
-          this.db.prepare("INSERT INTO entries(id, contractor_id, demand_id, start_ms, rate_cents, timezone, start_message) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            .run(`hours_${createHash("sha256").update(source).digest("hex").slice(0,24)}`, contractor.id, command.detail, ms, contractor.rate_cents, contractor.timezone, source);
-          this.bump(contractor.id);
-          this.audit(source, "start", undefined, { contractor_id: contractor.id, demand_id: command.detail, start_ms: ms });
-          response = `Ponto iniciado às ${localTime(ms, contractor.timezone)}, demanda ${command.detail}. Envie parei quando terminar.`;
-        }
+      } else if (command.kind !== "stop") {
+        response = this.startClock(contractor, input, command);
       } else if (!active) response = "Você não tem ponto aberto. Dane pode registrar uma correção se faltou o início.";
       else if (ms <= active.start_ms || this.overlaps(contractor.id, active.start_ms, ms, active.id)) {
         response = "Esse encerramento cruza outro ponto ou vem antes do início. Dane precisa revisar o horário.";

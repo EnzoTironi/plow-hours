@@ -1,11 +1,8 @@
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { z } from "zod";
-import { hoursEnabled, hoursLedger, managementSchema, normalizeHandle } from "./hours.ts";
+import { clockSourceSchema, hoursEnabled, hoursLedger, managementSchema, normalizeHandle, type ClockIntent } from "./hours.ts";
 import { selfSchema } from "./hours-billing.ts";
 import { accepts, request, type Account, type Chat, type Message } from "./transport.ts";
-
-const clockSourceSchema = z.object({ line_uid: z.string().min(1), chat_uid: z.string().min(1),
-  handle: z.string().min(1), message_uid: z.string().min(1), created_at: z.iso.datetime({ offset: true }), body: z.string() }).strict();
 
 export function hoursGroup(account: Account, chat: Chat) {
   if (!hoursEnabled() || account.accountId !== "chat") return undefined;
@@ -72,19 +69,22 @@ export function registerHours(api: OpenClawPluginApi, authorize: (context: OpenC
   }));
   api.registerTool(context => ({
     name: "plow_hours_self", label: "This contractor's hours and billing",
-    description: "Only the current registered contractor group. Interpret natural language and choose report, start or stop. report returns actual assigned demands, hours and masked billing status. start needs the assigned demand_id; stop closes the open point and may include supplied work details. Clock time and sender come from the verified inbound message, never tool arguments. Only the contractor can clock their own hours; the owner cannot clock on their behalf in the group. Ask when intent or demand is unclear; do not clock negations, plans, questions or historical statements. Confirm the actual tool result. Record invoice, payment_details or tax_document separately after the owner's persisted billing request. No other contractors, rates, corrections, files or payments.",
+    description: "Only the current registered contractor group. Interpret natural language and choose report, start or stop. report returns actual assigned demands, hours and masked billing status. start needs the assigned demand_id. When starting now is clear but the work is unclear, call clarify_start before asking; it saves the original verified message time and rate. Consult report.pending_start and use confirm_start with demand_id for the later answer, or cancel_start when the worker withdraws that start. A new start uses the current message time. stop closes the open point and may include supplied work details. Clock time and sender come from the verified inbound message, never tool arguments. Only the contractor can clock their own hours; the owner cannot clock on their behalf in the group. Ask when intent or demand is unclear; do not clock negations, plans, questions or historical statements. Confirm the actual tool result. Record invoice, payment_details or tax_document separately after the owner's persisted billing request. No other contractors, rates, corrections, files or payments.",
     parameters: z.toJSONSchema(selfSchema),
     async execute(_id, raw: unknown) {
       const { configuration, uid, contractor } = await selfGroupTurn(context);
       const input = selfSchema.parse(raw);
       let details: unknown;
-      if (input.action === "start" || input.action === "stop") {
+      if (input.action === "start" || input.action === "stop" || input.action === "clarify_start" || input.action === "confirm_start" || input.action === "cancel_start") {
         if (context.senderIsOwner) throw new Error("Only the contractor's own inbound message can clock their hours. Use the private owner DM for corrections.");
         const source = clockSourceSchema.parse(context.toolBindings?.plowHoursClock);
         if (source.line_uid !== configuration.lineUid || source.chat_uid !== uid
           || normalizeHandle(source.handle) !== contractor.handle) throw new Error("The clock source does not match this contractor's message.");
         context.assertInvocationCurrent?.();
-        const confirmation = hoursLedger().clock(source, { kind: input.action, detail: input.action === "start" ? input.demand_id : input.details });
+        const intent: ClockIntent = input.action === "start" || input.action === "confirm_start"
+          ? { kind: input.action, detail: input.demand_id }
+          : input.action === "stop" ? { kind: "stop", detail: input.details } : { kind: input.action };
+        const confirmation = hoursLedger().clock(source, intent);
         if (!confirmation) throw new Error("No authorized clock source.");
         details = { confirmation, state: hoursLedger().self({ action: "report" }, contractor.id, _id) };
       } else {

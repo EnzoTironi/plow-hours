@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
+import { z } from "zod";
 import { HoursLedger, clockCommand, SHEET_HEADERS } from "../plugin/hours.ts";
 
 function fixture(t: TestContext) {
@@ -19,6 +20,7 @@ function fixture(t: TestContext) {
     clock(body: string, created_at: string, extra = {}) {
       return ledger.clock({ line_uid: "line", chat_uid: "cht_ana", handle: "+1 (555) 000-0002", message_uid: `msg_${++sequence}`, body, created_at, ...extra });
     },
+    pendingStart() { return z.object({ pending_start: z.string().nullable() }).parse(ledger.self({ action: "report" }, "ana", "pending-report")).pending_start; },
     snapshot() { const result = ledger.report("ana")[0]; assert.ok(result); return result; },
   };
 }
@@ -36,6 +38,49 @@ test("original message timestamps produce the requested seven columns and surviv
   assert.deepEqual(result.sheet.values[1], ["2026-10-02", "2026-10-02 09:00:00 GMT-3", "2026-10-02 11:30:00 GMT-3", 2.5, 30, "Website", "landing | Build the landing page | github.com/team/site/issues/42 | commit abc123"]);
   assert.match(result.wiki.markdown, /Ana/);
   assert.match(result.wiki.markdown, /Recorded hours: 2.5/);
+});
+
+test("a clarified start retains its first message time, rate and timezone across restarts", t => {
+  const f = fixture(t);
+  const first = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "ambiguous",
+    body: "Comecei a trabalhar agora.", created_at: "2026-10-02T09:00:00-03:00" };
+  assert.match(f.ledger.clock(first, { kind: "clarify_start" }) ?? "", /09:00:00/);
+  assert.equal(f.snapshot().entries.length, 0);
+  f.ledger.manage({ ...f.contractor, rate_cents: 4000, timezone: "UTC" }, "changed-rate");
+  f.restart();
+  assert.equal(f.pendingStart(), first.created_at);
+  const reply = { ...first, message_uid: "clarification", body: "Na landing.", created_at: "2026-10-02T09:10:00-03:00" };
+  const confirmation = f.ledger.clock(reply, { kind: "confirm_start", detail: "landing" });
+  assert.match(confirmation ?? "", /09:00:00/);
+  const entry = f.snapshot().open_entry;
+  assert.ok(entry);
+  assert.equal(entry.start_ms, Date.parse(first.created_at));
+  assert.equal(entry.rate_cents, 3000);
+  assert.equal(entry.timezone, "America/Sao_Paulo");
+  assert.equal(entry.start_message, JSON.stringify([first.line_uid, first.chat_uid, first.message_uid]));
+  f.restart();
+  assert.equal(f.ledger.clock(reply, { kind: "confirm_start", detail: "landing" }), confirmation);
+  assert.equal(f.ledger.clock(first, { kind: "clarify_start" }), confirmation);
+  assert.equal(f.snapshot().entries.length, 1);
+  f.clock("/out", "2026-10-02T11:30:00-03:00");
+  assert.equal(f.snapshot().total_hours, 2.5);
+});
+
+test("pending starts cannot cross sender, group or line, and a fresh start uses its own time", t => {
+  const f = fixture(t);
+  const first = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "pending",
+    body: "Started working.", created_at: "2026-10-02T09:00:00-03:00" };
+  f.ledger.clock(first, { kind: "clarify_start" });
+  const reply = { ...first, message_uid: "answer", created_at: "2026-10-02T09:10:00-03:00", body: "Landing." };
+  assert.equal(f.ledger.clock({ ...reply, handle: "+15550000003" }, { kind: "confirm_start", detail: "landing" }), undefined);
+  assert.equal(f.ledger.clock({ ...reply, chat_uid: "cht_elsewhere" }, { kind: "confirm_start", detail: "landing" }), undefined);
+  assert.match(f.ledger.clock({ ...reply, line_uid: "other-line" }, { kind: "confirm_start", detail: "landing" }) ?? "", /Não há um início pendente/);
+  f.ledger.clock({ ...reply, message_uid: "withdrawn" }, { kind: "cancel_start" });
+  assert.equal(f.pendingStart(), null);
+  f.ledger.clock({ ...first, message_uid: "second-pending" }, { kind: "clarify_start" });
+  f.ledger.clock({ ...reply, message_uid: "fresh" }, { kind: "start", detail: "landing" });
+  assert.equal(f.snapshot().open_entry?.start_ms, Date.parse(reply.created_at));
+  assert.equal(f.pendingStart(), null);
 });
 
 test("message replay is idempotent across restarts and source identity includes the line and chat", t => {

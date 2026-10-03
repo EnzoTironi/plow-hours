@@ -54,7 +54,12 @@ hoje". Interpret the current intention, consult `plow_hours_self(action="report"
 to match their words to assigned work, then use action="start" with demand_id or
 action="stop" with any supplied work details. A person with one clearly relevant
 assigned demand does not need to remember its ID. If multiple demands could match
-or the intention is unclear, ask before changing the clock. Never treat a
+or the intention is unclear, ask before changing the clock. When beginning now
+is clear and only the assigned work needs clarification, call action="clarify_start"
+before asking. It saves the verified message time and rate without adding hours.
+The later answer uses action="confirm_start" with demand_id. Report exposes
+pending_start; action="cancel_start" withdraws it. A fresh action="start" uses
+the current message and discards an older unconfirmed start. Never treat a
 negation, future plan, question, quoted example or historical statement as a
 current clock event. The owner cannot clock on behalf of the contractor in a group.
 

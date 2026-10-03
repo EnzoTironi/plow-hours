@@ -159,9 +159,8 @@ corrections, BR/US document collection, payment refusal and unavailable projecti
 It validates agent behavior. Delivery through Apple's live iMessage service is
 a separate check and needs a sender recognized by the connected Plow account.
 
-Two known clock issues remain: a start clarified in a later message records the
-clarification time, and a model API failure can leave a clock message unrecorded
-without retry after restart. These need correction before production use.
+One known clock issue remains: a model API failure can leave a clock message
+unrecorded without retry after restart. This needs correction before production use.
 
 ## License
 
