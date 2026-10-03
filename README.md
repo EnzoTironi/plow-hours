@@ -185,9 +185,14 @@ separate delivery check with the real contractor identity. Fixture success does
 not prove Apple delivery. Cloud deployment and the chosen off-host backup
 destination also need their own checks.
 
+The public image includes native AMD64 and ARM64 variants. Docker selects the
+host's architecture, including Apple Silicon; OpenClaw's filesystem maintenance
+needs native system calls and must not run through Rosetta emulation.
+
 This image uses Build on Plow. Its base reporter registers the installation and
 reports actual OpenClaw usage every five minutes. A public `v*` tag publishes
-only after the pinned-image checks pass, using the official Plow image push CLI.
+only after the pinned-image checks pass on both architectures, using the official
+Plow image push CLI for each variant and publishing their shared manifest.
 Follow the [Agent Index publishing guide](https://aiworthusing.com/agent-index/publish)
 for first-time 1-click admission and hackathon review. Later admitted updates use
 `plow-agents image push IMAGE --promote plow-hours`. Keep the image public and the

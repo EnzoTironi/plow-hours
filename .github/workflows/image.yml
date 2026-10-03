@@ -11,7 +11,14 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -41,8 +48,24 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker tag ghcr.io/enzotironi/plow-hours:check "ghcr.io/enzotironi/plow-hours:$GITHUB_REF_NAME"
+          docker tag ghcr.io/enzotironi/plow-hours:check "ghcr.io/enzotironi/plow-hours:$GITHUB_REF_NAME-${{ matrix.arch }}"
           curl --fail --silent --show-error --location \
             https://raw.githubusercontent.com/plow-pbc/plow-agents/53dd92242e88f6e877cc09dbfb08b31b0e3925cb/bin/plow-agents \
             -o /tmp/plow-agents
-          python3 /tmp/plow-agents image push "ghcr.io/enzotironi/plow-hours:$GITHUB_REF_NAME"
+          python3 /tmp/plow-agents image push "ghcr.io/enzotironi/plow-hours:$GITHUB_REF_NAME-${{ matrix.arch }}"
+  publish:
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Publish the checked native platforms together
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx imagetools create \
+            --tag "ghcr.io/enzotironi/plow-hours:$GITHUB_REF_NAME" \
+            "ghcr.io/enzotironi/plow-hours:$GITHUB_REF_NAME-amd64" \
+            "ghcr.io/enzotironi/plow-hours:$GITHUB_REF_NAME-arm64"
