@@ -114,10 +114,10 @@ manifest.contracts.tools.push('plow_hours','plow_hours_self');
 await writeFile(plugin+'/openclaw.plugin.json',JSON.stringify(manifest,null,2)+'\n');
 let config=await readFile('/opt/plow/boot/config.ts','utf8');
 config='import { HoursLedger } from "../plugin/hours.ts";\n'+config;
-config=replaceOnce(config,'  const name = identity.agent?.name;', `  const ownerUids = [...new Set(identity.chats.filter(chat => chat.status === "active").flatMap(chat => chat.participants
-    .filter(p => p.type === "member" && p.role === "owner").map(p => p.type === "member" ? p.uid : "")))];
+config=replaceOnce(config,'export type Identity = {','export type Identity = {\n  owner_uid?: string;');
+config=replaceOnce(config,'  const name = identity.agent?.name;', `  const ownerUids = identity.owner_uid ? [identity.owner_uid] : [];
   if (process.env.PLOW_HOURS === "1") {
-    if (ownerUids.length !== 1 || !ownerUids[0]) throw new Error("Plow Hours needs exactly one authenticated owner identity.");
+    if (!ownerUids[0]?.trim()) throw new Error("Plow Hours needs an authenticated account owner identity.");
     const ledger = new HoursLedger(join(process.env.OPENCLAW_STATE_DIR ?? "/var/lib/plow", "plow-hours"));
     try { ledger.bindInstallation(identity.line.uid, ownerUids[0]); } finally { ledger.close(); }
   }
@@ -128,6 +128,22 @@ config=replaceOnce(config,'"plow_send_email"]','"plow_send_email", ...(process.e
 config=replaceOnce(config,'"automations", "read", "write", "edit", "exec",', '"automations",');
 config=replaceOnce(config,'deny: ["ask_user"]', 'deny: ["ask_user", "exec", "read", "write", "edit", "apply_patch"]');
 await writeFile('/opt/plow/boot/config.ts',config);
+let identity=await readFile('/opt/plow/boot/identity.ts','utf8');
+identity=replaceOnce(identity,'      if (!identity.line.uid)',`      if (process.env.PLOW_HOURS === "1") {
+        const owner = await fetch(\`\${base}/v1/auth/owner-uid\`, {
+          headers: { Authorization: \`Bearer \${token}\` }, signal: AbortSignal.timeout(10_000),
+        });
+        if (!owner.ok) throw new Error(\`Owner identity request refused: HTTP \${owner.status}\`);
+        const value: unknown = await owner.json();
+        if (!value || typeof value !== "object" || !("owner_uid" in value)
+          || typeof value.owner_uid !== "string" || !value.owner_uid.trim()) throw new Error("Owner identity is missing owner_uid");
+        identity.owner_uid = value.owner_uid;
+      }
+      if (!identity.line.uid)`);
+await writeFile('/opt/plow/boot/identity.ts',identity);
+let probeFixture=await readFile('/opt/plow/boot/probe-fixture.ts','utf8');
+probeFixture=replaceOnce(probeFixture,'export const probeIdentity: Identity = {','export const probeIdentity: Identity = {\n  owner_uid: "mem_probe",');
+await writeFile('/opt/plow/boot/probe-fixture.ts',probeFixture);
 let main=await readFile('/opt/plow/boot/main.js','utf8');
 main='import { startHoursBackups } from "../hours-source/backup.mjs";\n'+main;
 main=replaceOnce(main,'  startAgentIndex(300_000, writeLog);', '  startHoursBackups();\n  startAgentIndex(300_000, writeLog);');
@@ -142,6 +158,8 @@ for (const [source,destination] of [
   [plugin+'/hours-channel.ts',plugin+'/dist/hours-channel.js'],
   [plugin+'/hours-web.ts',plugin+'/dist/hours-web.js'],
   ['/opt/plow/boot/config.ts','/opt/plow/boot/config.js'],
+  ['/opt/plow/boot/identity.ts','/opt/plow/boot/identity.js'],
+  ['/opt/plow/boot/probe-fixture.ts','/opt/plow/boot/probe-fixture.js'],
 ]) {
   const text=await readFile(source,'utf8');
   await writeFile(destination,stripTypeScriptTypes(text.replaceAll(/(from "\.\/[^"\n]+)\.ts"/g,'$1.js"')));

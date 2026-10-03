@@ -86,7 +86,7 @@ const server = createServer(async (req, res) => {
         assert.ok(contractor, 'The agent must use the supplied contractor handle');
         assert.deepEqual([...body.members].sort(), [owner.provider_key, contractor.provider_key].sort());
         assert.equal(body.trusted, false);
-        const chat = { uid: `cht_eval_${contractor === ana ? 'ana' : 'ben'}`, status: 'active', trusted: body.trusted, participants: [owner, contractor, self] };
+        const chat = { uid: `cht_eval_${contractor === ana ? 'ana' : 'ben'}`, status: 'active', trusted: body.trusted, participants: [{ ...owner, uid: `owner-in-${contractor.uid}` }, contractor, self] };
         chats.set(chat.uid, chat); messages.set(chat.uid, []); send(chat, body.body);
         const response = { uid: chat.uid }; idempotency.set(body.idempotency_key, response); return json(response);
       }
@@ -124,7 +124,7 @@ process.env.HOME = '/var/lib/plow';
 process.env.OPENCLAW_GATEWAY_PASSWORD = randomBytes(32).toString('hex');
 delete process.env.OPENCLAW_GATEWAY_TOKEN;
 await mkdir('/var/lib/plow/workspace', { recursive: true });
-const config = renderConfig({ agent: { name: 'Plow Hours', web_url: 'https://hours.example.test' }, line: self.line, chats: [home] }, apiBase, 'untrusted');
+const config = renderConfig({ owner_uid: 'owner-account', agent: { name: 'Plow Hours', web_url: 'https://hours.example.test' }, line: self.line, chats: [home] }, apiBase, 'untrusted');
 await writeFile('/var/lib/plow/workspace/AGENTS.md', await renderPrompt(await readFile('/opt/plow/prompt/AGENTS.md', 'utf8'), null, token, 'untrusted', 'https://hours.example.test'));
 if (process.env.EVAL_CODEX_AUTH) {
   config.agents.defaults.model = { primary: 'openai/gpt-6-sol', fallbacks: [] };
@@ -144,7 +144,9 @@ async function waitFor(fn, timeout = 180_000) {
 }
 async function say(who, chatUid, body, created_at = new Date().toISOString(), uid = `msg_eval_in_${++sequence}`) {
   assert.ok(chats.has(chatUid), 'The real agent must have created the conversation first');
-  const message = { uid, body, direction: 'inbound', sender: who, created_at, attachments: [] };
+  const sender = chats.get(chatUid).participants.find(p => p.type === 'member' && p.provider_key === who.provider_key && p.role === who.role);
+  assert.ok(sender, 'The fixture sender must belong to this conversation');
+  const message = { uid, body, direction: 'inbound', sender, created_at, attachments: [] };
   const existing = messages.get(chatUid).find(m => m.uid === uid);
   if (!existing) messages.get(chatUid).push(message);
   const from = deliveries.length, beforeModels = modelRequests.length;

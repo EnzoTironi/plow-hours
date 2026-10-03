@@ -25,7 +25,7 @@ export function hoursGroup(account: Account, chat: Chat) {
     || members[0]?.type !== "member" || normalizeHandle(members[0].provider_key) !== contractor.handle) return undefined;
   const owner = owners[0];
   if (!owner || owner.type !== "member") return undefined;
-  hoursLedger().bindInstallation(account.lineUid, owner.uid);
+  hoursLedger().assertInstallationLine(account.lineUid);
   return contractor;
 }
 
@@ -70,7 +70,7 @@ export function registerHours(api: OpenClawPluginApi, authorize: (context: OpenC
       const input = ownerToolSchema.parse(raw);
       const owner = ownerChat.participants.find(p => p.type === "member" && p.role === "owner");
       if (!owner || owner.type !== "member") throw new Error("The owner identity is unavailable.");
-      hoursLedger().bindInstallation(account.lineUid, owner.uid);
+      hoursLedger().assertInstallationLine(account.lineUid);
       if (input.action === "guide") {
         context.assertInvocationCurrent?.();
         const details = { guide: readFileSync("/opt/plow/skills/contractor-hours/SKILL.md", "utf8") };
