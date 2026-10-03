@@ -20,9 +20,13 @@ export function clockHours(input: { account: Account; chat: Chat; message: Messa
   if (!hoursEnabled() || account.accountId !== "chat" || message.sender.type !== "member" || senderIsOwner) return undefined;
   if (hoursLedger().groupContractor(chat.uid) && !hoursGroup(account, chat)) return "O grupo mudou. O dono precisa revisar os participantes e as permissões antes de continuar o registro.";
   if (!hoursGroup(account, chat)) return undefined;
+  const source = { line_uid: account.lineUid, chat_uid: chat.uid,
+    handle: message.sender.provider_key, message_uid: message.uid, created_at: message.created_at, body: message.body };
+  const saved = hoursLedger().clockReceipt(source);
+  if (saved !== undefined) return saved;
+  hoursLedger().rememberClockMessage(source);
   if (!/^\/(in|out|hours)(?:\s|$)/i.test(message.body.trim())) return undefined;
-  return hoursLedger().clock({ line_uid: account.lineUid, chat_uid: chat.uid,
-    handle: message.sender.provider_key, message_uid: message.uid, created_at: message.created_at, body: message.body });
+  return hoursLedger().clock(source);
 }
 
 async function selfGroupTurn(context: OpenClawPluginToolContext) {

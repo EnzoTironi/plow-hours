@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFile } from "node:fs/promises";
+import { z } from "zod";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import entry from "../plugin/index.ts";
 import { hoursLedger } from "../plugin/hours.ts";
 import { hoursGroup } from "../plugin/hours-channel.ts";
 import { websocketFixture } from "./ws-fixture.ts";
+import { listen, type Account, type Chat, type Message } from "../plugin/transport.ts";
 
 type Tool = { name: string; execute: (id: string, args: unknown) => Promise<unknown> };
 const owner = { type: "member", uid: "owner", role: "owner", display_name: "Dane", provider_key: "+15550000001" };
@@ -13,6 +16,62 @@ const self = { type: "agent", relationship: "self", line: { uid: "line" } };
 const home = { uid: "cht_home", status: "active", trusted: false, participants: [self, owner] };
 const group = { uid: "cht_ana", status: "active", trusted: false, participants: [self, owner, contractor] };
 const profile = { action: "contractor", id: "ana", name: "Ana", handle: contractor.provider_key, chat_uid: group.uid, timezone: "America/Sao_Paulo", rate_cents: 3000 };
+
+test("an adopted contractor message recovers after restart even outside the provider history window", async t => {
+  const { server, apiBase, abortAfter } = await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  const ledger = hoursLedger();
+  ledger.manage(profile, "profile");
+  ledger.manage({ action: "demand", id: "landing", contractor_id: "ana", project: "Site", summary: "Landing page" }, "demand");
+  const message: Message = { uid: "failed-start", body: "Started the landing page.", created_at: "2026-10-02T09:00:00-03:00",
+    direction: "inbound", sender: { type: "member", uid: "ana", role: "member", display_name: "Ana", provider_key: profile.handle }, attachments: [] };
+  const chat: Chat = { uid: group.uid, status: "active", trusted: false, participants: [
+    { type: "agent", relationship: "self", line: { uid: "line" } },
+    { type: "member", uid: "owner", role: "owner", display_name: "Dane", provider_key: owner.provider_key }, message.sender,
+  ] };
+  let recovering = false;
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/ws/ticket")) return Response.json({ ticket: "fixture" });
+    if (parsed.pathname === "/v1/chats") return Response.json({ data: [home, chat], has_more: false });
+    if (parsed.pathname.endsWith("/messages")) return Response.json({ data: [], has_more: false });
+    if (parsed.pathname.endsWith(`/${chat.uid}`)) return Response.json(chat);
+    if (parsed.pathname.endsWith(`/${home.uid}`)) return Response.json(home);
+    throw new Error(`Unexpected provider request: ${parsed.pathname}`);
+  });
+  server.on("connection", (socket: { send: (text: string) => void }) => {
+    if (!recovering) socket.send(JSON.stringify({ event_type: "message_received", event_id: message.uid, chat_id: chat.uid, data: { message } }));
+  });
+  const account: Account = { apiBase, accountId: "chat", lineUid: "line", threadTrust: "untrusted" };
+  const failed = abortAfter(10_000);
+  await listen(account, failed.signal, line => { if (line.includes("turn failed")) failed.abort(); }, async (_chat, _message, _first, _history, ingress) => {
+    ingress.onSubmitted();
+    ledger.clockAttempt({ line_uid: account.lineUid, chat_uid: chat.uid, handle: profile.handle,
+      message_uid: message.uid, body: message.body, created_at: message.created_at });
+    await ingress.onAdopted();
+    throw new Error("Fixture: model returned HTTP 402 after adopting the source");
+  });
+  const checkpointPath = `${process.env.OPENCLAW_STATE_DIR}/plow-checkpoints/${chat.uid}`;
+  const checkpoint = z.object({ uid: z.string(), recent: z.array(z.string()) }).parse(JSON.parse(await readFile(checkpointPath, "utf8")));
+  assert.ok(!checkpoint.recent.includes(message.uid));
+  assert.equal(ledger.report("ana")[0]?.entries.length, 0);
+  recovering = true;
+  const restarted = abortAfter(10_000);
+  let recovered = 0;
+  await listen(account, restarted.signal, line => { if (line.includes("stage=terminal")) restarted.abort(); }, async (currentChat, current, _first, _history, ingress) => {
+    ingress.onSubmitted();
+    await ingress.onAdopted();
+    recovered++;
+    ledger.clock({ line_uid: account.lineUid, chat_uid: currentChat.uid, handle: profile.handle,
+      message_uid: current.uid, body: current.body, created_at: current.created_at }, { kind: "start", detail: "landing" });
+    return "completed";
+  });
+  assert.equal(recovered, 1);
+  assert.equal(ledger.report("ana")[0]?.open_entry?.start_ms, Date.parse(message.created_at));
+  assert.equal(ledger.report("ana")[0]?.entries.length, 1);
+});
 
 test("optional clock shortcuts commit and confirm without any model or Mac call", async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);

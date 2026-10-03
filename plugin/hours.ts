@@ -109,6 +109,12 @@ export class HoursLedger {
         contractor_id TEXT PRIMARY KEY REFERENCES contractors(id), source_json TEXT NOT NULL,
         rate_cents INTEGER NOT NULL, timezone TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS clock_inbox (
+        source TEXT PRIMARY KEY, contractor_id TEXT NOT NULL REFERENCES contractors(id),
+        line_uid TEXT NOT NULL, chat_uid TEXT NOT NULL, source_json TEXT NOT NULL,
+        rate_cents INTEGER NOT NULL, timezone TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+        complete INTEGER NOT NULL DEFAULT 0 CHECK(complete IN (0, 1))
+      );
       CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY, source TEXT NOT NULL, action TEXT NOT NULL, before_json TEXT, after_json TEXT NOT NULL);
     `);
     this.billing = new HoursBilling(this.db);
@@ -198,6 +204,46 @@ export class HoursLedger {
     return { source: clockSourceSchema.parse(JSON.parse(pending.source_json)), rate_cents: pending.rate_cents, timezone: pending.timezone };
   }
 
+  rememberClockMessage(input: ClockSource) {
+    const contractor = this.groupContractor(input.chat_uid);
+    if (!contractor || contractor.handle !== normalizeHandle(input.handle)) throw new Error("Unregistered clock source.");
+    this.db.prepare(`INSERT INTO clock_inbox(source, contractor_id, line_uid, chat_uid, source_json, rate_cents, timezone)
+      VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
+      .run(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, input.line_uid, input.chat_uid,
+        JSON.stringify(input), contractor.rate_cents, contractor.timezone);
+  }
+
+  clockAttempt(input: ClockSource): number {
+    this.rememberClockMessage(input);
+    return this.transaction(() => {
+      const source = JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]);
+      const row = this.db.prepare("UPDATE clock_inbox SET attempts = attempts + 1 WHERE source = ? RETURNING attempts").get(source);
+      return z.object({ attempts: z.number().int().positive() }).parse(row).attempts;
+    });
+  }
+
+  completeClockMessage(lineUid: string, chatUid: string, messageUid: string) {
+    this.db.prepare("UPDATE clock_inbox SET complete = 1 WHERE source = ?").run(JSON.stringify([lineUid, chatUid, messageUid]));
+  }
+
+  isPendingClockMessage(lineUid: string, chatUid: string, messageUid: string): boolean {
+    return Boolean(this.db.prepare("SELECT source FROM clock_inbox WHERE source = ? AND complete = 0")
+      .get(JSON.stringify([lineUid, chatUid, messageUid])));
+  }
+
+  pendingClockMessages(lineUid: string, chatUid: string): ClockSource[] {
+    return this.db.prepare("SELECT source_json FROM clock_inbox WHERE line_uid = ? AND chat_uid = ? AND complete = 0")
+      .all(lineUid, chatUid).map(row => clockSourceSchema.parse(JSON.parse(z.object({ source_json: z.string() }).parse(row).source_json)));
+  }
+
+  private recordedClockSource(input: ClockSource) {
+    const row = this.db.prepare("SELECT source_json, rate_cents, timezone FROM clock_inbox WHERE source = ?")
+      .get(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]));
+    if (!row) return undefined;
+    const recorded = z.object({ source_json: z.string(), rate_cents: z.number().int(), timezone: z.string() }).parse(row);
+    return { source: clockSourceSchema.parse(JSON.parse(recorded.source_json)), rate_cents: recorded.rate_cents, timezone: recorded.timezone };
+  }
+
   private startClock(contractor: Contractor, input: ClockSource, command: StartIntent): string {
     const active = this.open(contractor.id);
     if (active) return `Seu ponto já está aberto na demanda ${active.demand_id}. Envie parei antes de iniciar outro.`;
@@ -206,17 +252,18 @@ export class HoursLedger {
       return "Início pendente cancelado. Nenhuma hora foi registrada.";
     }
     const pending = this.pendingStart(contractor.id);
+    const original = this.recordedClockSource(input) ?? { source: input, rate_cents: contractor.rate_cents, timezone: contractor.timezone };
     if (command.kind === "clarify_start") {
       if (!pending) this.db.prepare("INSERT INTO pending_starts(contractor_id, source_json, rate_cents, timezone) VALUES (?, ?, ?, ?)")
-        .run(contractor.id, JSON.stringify(input), contractor.rate_cents, contractor.timezone);
-      const start = pending?.source.created_at ?? input.created_at;
-      return `Recebi seu início às ${localTime(Date.parse(start), pending?.timezone ?? contractor.timezone)}. Qual demanda você está fazendo? Vou manter esse horário quando você confirmar.`;
+        .run(contractor.id, JSON.stringify(original.source), original.rate_cents, original.timezone);
+      const start = pending?.source.created_at ?? original.source.created_at;
+      return `Recebi seu início às ${localTime(Date.parse(start), pending?.timezone ?? original.timezone)}. Qual demanda você está fazendo? Vou manter esse horário quando você confirmar.`;
     }
     if (command.kind === "confirm_start" && (!pending || pending.source.line_uid !== input.line_uid
       || pending.source.chat_uid !== input.chat_uid || normalizeHandle(pending.source.handle) !== normalizeHandle(input.handle))) {
       return "Não há um início pendente desta conversa para confirmar. Me diga quando começar uma demanda.";
     }
-    const origin = command.kind === "confirm_start" && pending ? pending : { source: input, rate_cents: contractor.rate_cents, timezone: contractor.timezone };
+    const origin = command.kind === "confirm_start" && pending ? pending : original;
     const ms = Date.parse(origin.source.created_at);
     if (ms > Date.parse(input.created_at)) return "A confirmação veio antes do início pendente. O dono precisa revisar o horário.";
     const demand = this.db.prepare("SELECT id FROM demands WHERE id = ? AND contractor_id = ?").get(command.detail, contractor.id);
@@ -231,6 +278,19 @@ export class HoursLedger {
     const response = `Ponto iniciado às ${localTime(ms, origin.timezone)}, demanda ${command.detail}. Envie parei quando terminar.`;
     if (command.kind === "confirm_start") this.db.prepare("UPDATE receipts SET response = ? WHERE source = ?").run(response, source);
     return response;
+  }
+
+  clockReceipt(input: ClockSource): string | undefined {
+    const contractor = this.groupContractor(input.chat_uid);
+    if (!contractor || contractor.handle !== normalizeHandle(input.handle)) return undefined;
+    const source = JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]);
+    const receipt = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(source);
+    return receipt ? receiptSchema.parse(receipt).response : undefined;
+  }
+
+  claimFailureNotice(input: ClockSource): boolean {
+    const source = `failure-notice:${JSON.stringify([input.line_uid, input.chat_uid, input.message_uid])}`;
+    return Boolean(this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, '') ON CONFLICT DO NOTHING").run(source).changes);
   }
 
   clock(input: ClockSource, intent?: ClockIntent): string | undefined {
