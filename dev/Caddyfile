@@ -1,5 +1,8 @@
 # LOCAL DEV ONLY: anyone who can reach localhost:3331 is admin of this agent.
 :3001 {
+	@foreign_host not host localhost 127.0.0.1
+	respond @foreign_host 403
+
 	@foreign_origin {
 		header Origin *
 		not {

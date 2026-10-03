@@ -33,6 +33,8 @@ jobs:
             '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test --test-timeout=180000 /opt/plow/tests/*.test.ts'
       - name: Probe gateway authentication and timesheet
         run: docker run --rm --network none ghcr.io/enzotironi/plow-hours:check /opt/plow/probe
+      - name: Check the local proxy and evaluator network boundaries
+        run: node tests/dev-boundaries.mjs
       - name: Publish the checked release image
         if: startsWith(github.ref, 'refs/tags/v')
         env:
