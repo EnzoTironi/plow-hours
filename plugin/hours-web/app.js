@@ -58,10 +58,10 @@ function render() {
   }));
   $('empty').hidden = closed.length > 0;
   $('empty').querySelector('h3').textContent = valid ? (snapshot.contractors.length ? 'No completed sessions in this view' : 'Ready for your first contractor') : 'Check the date range';
-  $('empty').querySelector('p').textContent = valid ? (snapshot.contractors.length ? 'Hours appear when a contractor stops their clock. Try clearing the filters.' : 'Register a contractor and their assigned demands with the agent to get started.') : 'The end date must be on or after the start date.';
+  $('empty').querySelector('p').textContent = valid ? (snapshot.contractors.length ? 'Hours appear when a contractor stops their clock. Try clearing the filters.' : 'Register a contractor and their assigned work with the agent to get started.') : 'The end date must be on or after the start date.';
   $('row-count').textContent = `${closed.length} completed ${closed.length === 1 ? 'session' : 'sessions'}`;
   $('download').disabled = !$('contractor').value || !closed.length || !valid;
-  $('export-hint').textContent = $('contractor').value ? 'Dates and rates follow each session’s recorded timezone and hourly rate.' : 'Choose a contractor to download their seven-column timesheet.';
+  $('export-hint').textContent = $('contractor').value ? 'Dates and rates follow each session’s recorded timezone and hourly rate.' : 'Choose a contractor to download their timesheet.';
   $('demands').replaceChildren(...people.flatMap(person => person.demands.filter(demand => !$('project').value || demand.project === $('project').value).map(demand => {
     const node = element('div', undefined, 'demand');
     const title = element('div', undefined, 'demand-title');
@@ -70,7 +70,7 @@ function render() {
     if (demand.references) node.append(element('p', demand.references));
     return node;
   })));
-  if (!$('demands').childElementCount) $('demands').append(element('p', 'No assigned demands in this view.'));
+  if (!$('demands').childElementCount) $('demands').append(element('p', 'No assigned work in this view.'));
   $('profiles').replaceChildren(...people.map(person => {
     const node = element('div', undefined, 'profile');
     const title = element('div', person.name, 'profile-title');
