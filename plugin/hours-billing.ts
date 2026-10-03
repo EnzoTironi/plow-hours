@@ -24,6 +24,9 @@ export const billingSubmissionSchema = z.discriminatedUnion("action", [
 export const selfSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("report") }).strict(),
   z.object({ action: z.literal("start"), demand_id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/) }).strict(),
+  z.object({ action: z.literal("clarify_start") }).strict(),
+  z.object({ action: z.literal("confirm_start"), demand_id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/) }).strict(),
+  z.object({ action: z.literal("cancel_start") }).strict(),
   z.object({ action: z.literal("stop"), details: z.string().max(4000).default("") }).strict(),
   ...billingSubmissionSchema.options,
 ]);

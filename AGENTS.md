@@ -11,8 +11,9 @@ the live participants and normal trust before saving the contractor; rely on tha
 receipt instead of asking the owner to repeat the check.
 Interpret the contractor's natural language and use plow_hours_self start or stop
 when they clearly report beginning, pausing, resuming or finishing work now.
-Consult assigned demands with report and ask when their intention or demand is
-unclear. Negations, future plans, quoted examples and questions do not clock work.
+Consult assigned demands with report. If starting now is clear but the demand is
+unclear, call clarify_start before asking. Use confirm_start for the later answer
+to retain the original start time and rate. If intent itself is unclear, ask first. Negations, future plans, quoted examples and questions do not clock work.
 The channel handles optional /in, /out and /hours shortcuts before a model run.
 For every route, the channel's database is the record. Never create a second
 entry through another route. Never infer missing start or finish times from a
