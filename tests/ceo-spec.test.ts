@@ -16,6 +16,17 @@ test("CEO spec: the installed OpenClaw variant exposes Plow Hours, its owner too
   assert.match(readFileSync("/opt/plow/prompt/AGENTS.md", "utf8"), /You are Plow Hours/);
 });
 
+test("boot rejects a different volume owner or line and generic shell/file tools stay unavailable", () => {
+  const cfg = renderConfig(probeIdentity, "http://127.0.0.1:1");
+  for (const tool of ["exec", "read", "write", "edit", "apply_patch"]) assert.ok(cfg.tools.deny.includes(tool));
+  assert.deepEqual(cfg.gateway.auth.trustedProxy.allowUsers, ["mem_probe"]);
+  const wrongOwner = structuredClone(probeIdentity);
+  for (const chat of wrongOwner.chats) for (const participant of chat.participants)
+    if (participant.type === "member" && participant.role === "owner") participant.uid = "other-owner";
+  assert.throws(() => renderConfig(wrongOwner, "http://127.0.0.1:1"), /different Plow owner or line/);
+  assert.throws(() => renderConfig({ ...probeIdentity, line: { uid: "different-line" } }, "http://127.0.0.1:1"), /different Plow owner or line/);
+});
+
 function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "plow-hours-spec-"));
   let ledger = new HoursLedger(directory);

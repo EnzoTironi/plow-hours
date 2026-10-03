@@ -6,6 +6,7 @@ services:
     environment:
       AGENT_ID: plow-hours
       AGENT_NAME: Plow Hours
+      PLOW_HOURS_LOCAL: "1"
       AGENT_BLURB: Contractor time tracking through iMessage, with a live timesheet linked to assigned work.
     ports:
       - "127.0.0.1:3331:3001"

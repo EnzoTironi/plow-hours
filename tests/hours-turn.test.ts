@@ -226,7 +226,7 @@ test("natural clock tools bind the provider timestamp and message UID, never the
   }
   const start = clockTool("natural-start", "2026-10-02T09:00:00-03:00");
   await assert.rejects(() => start.execute("invented-time", { action: "start", demand_id: "landing", created_at: "2020-01-01T00:00:00Z" }));
-  await assert.rejects(() => clockTool("owner", "2026-10-02T09:00:00-03:00", { owner: true }).execute("owner-clock", { action: "start", demand_id: "landing" }), /contractor's own/);
+  await assert.rejects(() => clockTool("owner", "2026-10-02T09:00:00-03:00", { owner: true }).execute("owner-clock", { action: "start", demand_id: "landing" }), /Owner group turns can only/);
   await assert.rejects(() => clockTool("wrong", "2026-10-02T09:00:00-03:00", { handle: "+15550000003" }).execute("wrong-clock", { action: "start", demand_id: "landing" }), /source does not match/);
   await assert.rejects(() => clockTool("expired", "2026-10-02T09:00:00-03:00", { stale: true }).execute("expired-clock", { action: "start", demand_id: "landing" }), /Expired turn/);
   await start.execute("first-call", { action: "start", demand_id: "landing" });
@@ -238,4 +238,42 @@ test("natural clock tools bind the provider timestamp and message UID, never the
   assert.equal(ledger.report("ana")[0]?.entries.length, 1);
   assert.equal(ledger.report("ana")[0]?.total_hours, 2.5);
   assert.equal(ledger.report("ana")[0]?.open_entry, null);
+});
+
+test("natural owner approval is scoped to the current private DM and exact reviewed data", async t => {
+  await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS; process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  const ledger = hoursLedger(); ledger.manage(profile, "profile");
+  ledger.manage({ action: "demand", id: "landing", contractor_id: "ana", project: "Website", summary: "Landing page" }, "demand");
+  ledger.manage({ action: "manual", contractor_id: "ana", demand_id: "landing", start: "2026-10-02T09:00:00Z", finish: "2026-10-02T10:00:00Z", rate_cents: 3000, reason: "Worker confirmed missing start" }, "hours");
+  ledger.manage({ action: "billing_request", contractor_id: "ana", country: "BR", period_start: "2026-10-02", period_end: "2026-10-02" }, "request");
+  ledger.self({ action: "invoice", invoice: { number: "NF-1", url: "https://private.example.test/nf.pdf", currency: "USD", amount_cents: 3000, period_start: "2026-10-02", period_end: "2026-10-02" } }, "ana", "invoice");
+  ledger.self({ action: "payment_details", payment: { method: "pix", beneficiary: "Ana", document_url: "https://private.example.test/pix.pdf" } }, "ana", "pix");
+  ledger.manage({ action: "close_period", contractor_id: "ana" }, "close");
+  const before = ledger.billingReport("ana"); assert.ok(before.fingerprint);
+  const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line" }, cfg = { channels: { plow: account } };
+  t.mock.method(globalThis, "fetch", async () => Response.json(home));
+  function tool(bindingHandle = owner.provider_key, bindingChat = home.uid) {
+    let ownerTool: Tool | undefined;
+    entry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
+      registerTool(factory: (context: object) => Tool) {
+        const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: home.uid,
+          requesterSenderId: "plow-owner", senderIsOwner: true, toolBindings: { plowHoursOwner: { line_uid: "line", chat_uid: bindingChat, handle: bindingHandle, message_uid: "approval", created_at: "2026-10-03T12:00:00Z", body: "I reviewed Ana's invoice and Pix instructions. Approve these USD 30 for her." } } });
+        if (candidate.name === "plow_hours") ownerTool = candidate;
+      },
+    });
+    assert.ok(ownerTool); return ownerTool;
+  }
+  const ownerTool = tool();
+  assert.match(JSON.stringify(await ownerTool.execute("guide", { action: "guide" })), /Contractor hours/);
+  await assert.rejects(() => ownerTool.execute("arbitrary-file", { action: "guide", path: "/var/lib/plow/openclaw.json" }));
+  const approval = { action: "approve_billing", contractor_id: "ana", fingerprint: before.fingerprint };
+  await assert.rejects(() => tool(contractor.provider_key).execute("worker-claimed-owner", approval), /verified owner message/);
+  await assert.rejects(() => tool(owner.provider_key, group.uid).execute("group-binding", approval), /verified owner message/);
+  await ownerTool.execute("owner-approval", approval);
+  assert.equal(ledger.billingReport("ana").approved, true); assert.equal(ledger.billingReport("ana").paid, false);
+  ledger.self({ action: "payment_details", payment: { method: "pix", beneficiary: "Ana New", document_url: "https://private.example.test/new.pdf" } }, "ana", "changed-pix");
+  await assert.rejects(() => ownerTool.execute("stale-approval", approval), /changed/);
+  assert.equal(ledger.billingReport("ana").approved, false);
 });

@@ -31,6 +31,10 @@ async function check() {
     const response=await fetch(base+'/data',{method:'POST',headers,signal:AbortSignal.timeout(5000)});
     if (response.status!==405) throw new Error('Read-only route: '+response.status);
   }
+  for (const user of ['mem_other_owner', 'mem_contractor', 'dev-owner']) {
+    const response=await fetch(base+'/data',{headers:{'x-plow-user':user,'x-forwarded-for':'192.0.2.1'},signal:AbortSignal.timeout(5000)});
+    if (![401,403].includes(response.status)) throw new Error('Wrong owner allowed: '+response.status);
+  }
   success=true;
   console.log('PLOW_HOURS_PROBE_OK');
 }
