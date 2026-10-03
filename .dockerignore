@@ -1,0 +1,9 @@
+.git
+plow-credentials
+node_modules
+work
+evidence
+evals
+tests
+*.log
+.DS_Store

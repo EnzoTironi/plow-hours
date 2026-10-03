@@ -1,0 +1,6 @@
+Plow Hours custom code is MIT licensed. The Plow and OpenClaw base image
+dependencies retain their own licenses and copyright notices.
+
+The bundled Plow logo is the original SVG from https://plow.co, also used in
+Plow Latch's onboarding. Plow and the Plow logo are trademarks of The Plow
+Collective, Inc.; this repository's MIT license grants no rights to those marks.
