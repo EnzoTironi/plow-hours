@@ -2,16 +2,19 @@ import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { hoursEnabled, hoursLedger, type HoursLedger } from "./hours.ts";
+import { needsReview } from "./hours-period.ts";
 
 export function hoursWebSnapshot(ledger: HoursLedger) {
   return {
     updated_at: new Date().toISOString(),
-    contractors: ledger.report().map(({ contractor, demands, entries, sheet }) => {
+    contractors: ledger.report().map(({ contractor, demands, entries, sheet, pending_clock }) => {
       let closedIndex = 0;
       return {
         id: contractor.id, name: contractor.name, timezone: contractor.timezone, rate_usd: contractor.rate_cents / 100,
         demands: demands.map(({ id, project, summary, references }) => ({ id, project, summary, references })),
-        entries: entries.map(entry => {
+        active: Boolean(contractor.active), review_needed: entries.some(needsReview) || pending_clock.reviews.length > 0,
+        billing: (() => { const r = ledger.billingReport(contractor.id); return { requested: r.requested, closed: r.closed, approved: r.approved, ready_for_owner_review: r.ready_for_owner_review, discrepancy_cents: r.discrepancy_cents, expected: r.expected ? { currency: r.expected.currency, amount_cents: r.expected.expected_amount_cents, total_hours: r.expected.total_hours } : null }; })(),
+        entries: entries.filter(entry => !entry.voided).map(entry => {
           const demand = demands.find(item => item.id === entry.demand_id);
           if (!demand) throw new Error("Time entry has no demand.");
           const row = entry.end_ms === null ? null : sheet.values[++closedIndex];
