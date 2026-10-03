@@ -2,7 +2,7 @@
 
 Contractor time tracking through iMessage, with a live timesheet linked to assigned work.
 
-[View the recorded demo and evaluation evidence](https://github.com/EnzoTironi/plow-hours/releases/tag/v2).
+[Watch the demo and review the release evidence](https://github.com/EnzoTironi/plow-hours/releases/tag/v3).
 
 Each contractor has a normal iMessage group with the owner and the agent. They
 say things like "I’m starting the landing page now", "taking a break" and
@@ -10,6 +10,13 @@ say things like "I’m starting the landing page now", "taking a break" and
 when something is ambiguous, and calls the scoped clock tool. Plow Hours saves
 the original message timestamp before confirming. No connected Mac is needed. The owner reviews the same durable record at `/hours` on the agent's web
 address. Google Sheets and R2 are optional; the web view needs neither.
+
+## What you can use it for
+
+- **Clock in without another app.** Tell the group when you start, take a break or finish. The agent connects that time to the work you were assigned.
+- **Keep a few contractors organized.** Give each person their own group. They see their own records; you get the full picture in your private conversation and timesheet.
+- **Remember what those hours were for.** Keep the project, ticket, commit and work notes alongside each block of time.
+- **Get the paperwork before payday.** Ask for a nota fiscal and Pix details in Brazil, or an invoice and ACH details in the US. Review the receipts yourself before paying.
 
 ## Run locally
 
@@ -20,8 +27,11 @@ You need Docker, Git, Python 3.11+ and the
 git clone https://github.com/EnzoTironi/plow-hours.git
 cd plow-hours
 plow-agents login
+plow-agents profile --show
 plow-agents lines
 plow-agents deploy --local --line ln_xxx
+printf '\nAGENT_ID=plow-hours\n' >> plow-credentials
+docker compose up -d
 ```
 
 Choose a free line from `plow-agents lines`; replace `ln_xxx` with its actual ID.
@@ -96,6 +106,14 @@ Details (github ticket, git commit, etc). Start/finish retain dates, seconds and
 offsets. Hour exports use six decimal places; totals sum elapsed time before
 rounding. There are no billing increment or overtime rules.
 
+When a clear start needs a task clarification, the agent saves that first message's
+time and rate before asking. Your reply identifies the task without moving the start
+forward. Contractor text messages also enter a durable inbox before the model runs.
+If the model fails, the message remains pending across restarts. Recovery uses the
+original sender, timestamp and rate, checks the current group again, and records
+each clock event once. Provider cooldowns still apply; recovery waits for the model
+to become available. A failure notice does not claim that hours were recorded.
+
 The SQLite database is in `/var/lib/plow/plow-hours/hours.sqlite`, within the
 existing persistent volume. Back up using SQLite's backup API or while the agent
 is stopped, including its WAL. Redeploy without deleting the volume. R2 can be an
@@ -120,14 +138,14 @@ docker run --rm --user root --network none \
   -v "$PWD/node_modules:/opt/plow/node_modules:ro" \
   -v "$PWD/tests:/opt/plow/tests:ro" plow-hours:test sh -c \
   '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test --test-timeout=180000 /opt/plow/tests/*.test.ts'
-plow-agents image build ghcr.io/enzotironi/plow-hours:v2
-plow-agents image push ghcr.io/enzotironi/plow-hours:v2
+plow-agents image build ghcr.io/enzotironi/plow-hours:v3
+plow-agents image push ghcr.io/enzotironi/plow-hours:v3
 plow-agents profile --show
 ```
 
 Make the GHCR package public. Use the digest printed by push, your Plow account
 UID and `plow-hours` for the admin's initial one-click admission. Once admitted,
-updates use `plow-agents image push ghcr.io/enzotironi/plow-hours:v3 --promote plow-hours`.
+updates use `plow-agents image push ghcr.io/enzotironi/plow-hours:v4 --promote plow-hours`.
 Follow the [Agent Index publishing guide](https://aiworthusing.com/agent-index/publish)
 for media registration and WIP review.
 
@@ -159,8 +177,10 @@ corrections, BR/US document collection, payment refusal and unavailable projecti
 It validates agent behavior. Delivery through Apple's live iMessage service is
 a separate check and needs a sender recognized by the connected Plow account.
 
-One known clock issue remains: a model API failure can leave a clock message
-unrecorded without retry after restart. This needs correction before production use.
+Release evidence includes a real-model outage and restart test. Its isolated test
+fixture clears the simulated provider's billing cooldown when restoring availability;
+the production agent keeps the provider's normal cooldown policy. A live worker's
+Apple iMessage start/stop conversation still needs a separate delivery check.
 
 ## License
 
