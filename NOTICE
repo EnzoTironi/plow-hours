@@ -4,3 +4,8 @@ dependencies retain their own licenses and copyright notices.
 The bundled Plow logo is the original SVG from https://plow.co, also used in
 Plow Latch's onboarding. Plow and the Plow logo are trademarks of The Plow
 Collective, Inc.; this repository's MIT license grants no rights to those marks.
+
+The timesheet follows Plow's landing-page typography and Latch onboarding's
+volt accent. DM Sans and DM Mono are the bundled fonts used by Latch onboarding;
+Epilogue is the landing-page heading font, obtained from Fontsource 5.3.0.
+The fonts retain their SIL Open Font License notices in plugin/hours-web/fonts.

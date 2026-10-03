@@ -34,12 +34,15 @@ export function createHoursWebHandler(getLedger: () => HoursLedger) {
     ["/hours/app.js", { type: "text/javascript; charset=utf-8", body: readFileSync(new URL("./hours-web/app.js", import.meta.url)) }],
     ["/hours/style.css", { type: "text/css; charset=utf-8", body: readFileSync(new URL("./hours-web/style.css", import.meta.url)) }],
     ["/hours/plow-logo.svg", { type: "image/svg+xml", body: readFileSync(new URL("./hours-web/plow-logo.svg", import.meta.url)) }],
+    ["/hours/fonts/dm-sans-latin.woff2", { type: "font/woff2", body: readFileSync(new URL("./hours-web/fonts/dm-sans-latin.woff2", import.meta.url)) }],
+    ["/hours/fonts/dm-mono-400-latin.woff2", { type: "font/woff2", body: readFileSync(new URL("./hours-web/fonts/dm-mono-400-latin.woff2", import.meta.url)) }],
+    ["/hours/fonts/epilogue-latin-500-normal.woff2", { type: "font/woff2", body: readFileSync(new URL("./hours-web/fonts/epilogue-latin-500-normal.woff2", import.meta.url)) }],
   ]);
   return (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "same-origin");
-    res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'");
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.writeHead(405, { Allow: "GET, HEAD" });
       res.end("Read-only timesheet");

@@ -14,7 +14,7 @@ let success=false;
 const deadline=setTimeout(()=>{console.error('Plow Hours probe timed out');process.kill(process.pid,'SIGTERM');},60000);
 let log='';
 let checking=false;
-const paths=['','/data','/app.js','/style.css','/plow-logo.svg'];
+const paths=['','/data','/app.js','/style.css','/plow-logo.svg','/fonts/dm-sans-latin.woff2','/fonts/dm-mono-400-latin.woff2','/fonts/epilogue-latin-500-normal.woff2'];
 async function check() {
   const base='http://127.0.0.1:3000/hours';
   for (const path of paths) {
