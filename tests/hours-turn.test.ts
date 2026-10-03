@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import entry from "../plugin/index.ts";
 import { hoursLedger } from "../plugin/hours.ts";
+import { hoursGroup } from "../plugin/hours-channel.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 type Tool = { name: string; execute: (id: string, args: unknown) => Promise<unknown> };
@@ -13,7 +14,7 @@ const home = { uid: "cht_home", status: "active", trusted: false, participants: 
 const group = { uid: "cht_ana", status: "active", trusted: false, participants: [self, owner, contractor] };
 const profile = { action: "contractor", id: "ana", name: "Ana", handle: contractor.provider_key, chat_uid: group.uid, timezone: "America/Sao_Paulo", rate_cents: 3000 };
 
-test("registered normal-room clock events commit and confirm without any model or Mac call", async t => {
+test("optional clock shortcuts commit and confirm without any model or Mac call", async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const previous = process.env.PLOW_HOURS;
   process.env.PLOW_HOURS = "1";
@@ -41,8 +42,8 @@ test("registered normal-room clock events commit and confirm without any model o
   });
   server.on("connection", (socket: { send: (text: string) => void }) => {
     for (const [uid, body, created_at] of [
-      ["start", "comecei landing", "2026-10-02T09:00:00-03:00"],
-      ["stop", "parei commit abc123", "2026-10-02T11:30:00-03:00"],
+      ["start", "/in landing", "2026-10-02T09:00:00-03:00"],
+      ["stop", "/out commit abc123", "2026-10-02T11:30:00-03:00"],
     ]) socket.send(JSON.stringify({ event_type: "message_received", event_id: uid, chat_id: group.uid,
       data: { message: { uid, body, created_at, direction: "inbound", sender: contractor, attachments: [] } } }));
   });
@@ -103,4 +104,79 @@ test("the base does not register the feature when its opt-in is absent", () => {
     });
     assert.ok(!names.includes("plow_hours"));
   } finally { if (previous !== undefined) process.env.PLOW_HOURS = previous; }
+});
+
+test("the scoped tool binds both the live roster and sender; owner DM, another group and changed membership have no member access", async t => {
+  await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  const ledger = hoursLedger();
+  ledger.manage(profile, "scoped-profile");
+  const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line" };
+  const cfg = { channels: { plow: account } };
+  let served = group;
+  t.mock.method(globalThis, "fetch", async () => Response.json(served));
+  for (const scenario of ["member", "owner-group", "owner-dm", "other-group", "wrong-sender", "expanded-group", "trusted-group"] as const) {
+    served = scenario === "owner-dm" ? { ...group, ...home } : scenario === "other-group" ? { ...group, uid: "cht_other" }
+      : scenario === "expanded-group" ? { ...group, participants: [...group.participants, { ...contractor, uid: "other", provider_key: "+15550000003" }] }
+      : { ...group, trusted: scenario === "trusted-group" };
+    let tool: Tool | undefined;
+    entry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
+      registerTool(factory: (context: object) => Tool) {
+        const candidate = factory({ config: cfg, sessionKey: scenario === "owner-dm" ? "agent:main:main" : `agent:main:plow:group:${served.uid}`,
+          messageChannel: "plow", agentAccountId: "chat", nativeChannelId: served.uid,
+          requesterSenderId: scenario === "owner-group" ? "plow-owner" : scenario === "wrong-sender" ? "+15550000003" : contractor.provider_key,
+          senderIsOwner: scenario === "owner-group" });
+        if (candidate.name === "plow_hours_self") tool = candidate;
+      },
+    });
+    assert.ok(tool);
+    if (scenario === "member" || scenario === "owner-group") {
+      const result = await tool.execute(`self-${scenario}`, { action: "report" });
+      assert.ok(JSON.stringify(result).includes('"name":"Ana"'));
+    } else await assert.rejects(() => tool.execute(`self-${scenario}`, { action: "report" }), /registered contractor's group/);
+  }
+  assert.ok(hoursGroup(account, group));
+  assert.equal(hoursGroup(account, { ...group, participants: [...group.participants, contractor] }), undefined);
+});
+
+test("natural clock tools bind the provider timestamp and message UID, never the model's arguments or the owner's identity", async t => {
+  await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  const ledger = hoursLedger();
+  ledger.manage(profile, "natural-profile");
+  ledger.manage({ action: "demand", id: "landing", contractor_id: "ana", project: "Site", summary: "Landing page" }, "natural-demand");
+  const cfg = { channels: { plow: { apiBase: "http://fixture", accountId: "chat", lineUid: "line" } } };
+  t.mock.method(globalThis, "fetch", async () => Response.json(group));
+  function clockTool(messageUid: string, createdAt: string, options: { owner?: boolean; handle?: string; stale?: boolean } = {}) {
+    let tool: Tool | undefined;
+    entry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
+      registerTool(factory: (context: object) => Tool) {
+        const candidate = factory({ config: cfg, sessionKey: `agent:main:plow:group:${group.uid}`, messageChannel: "plow", agentAccountId: "chat",
+          nativeChannelId: group.uid, requesterSenderId: options.owner ? "plow-owner" : contractor.provider_key, senderIsOwner: Boolean(options.owner),
+          assertInvocationCurrent() { if (options.stale) throw new Error("Expired turn"); },
+          toolBindings: { plowHoursClock: { line_uid: "line", chat_uid: group.uid, handle: options.handle ?? contractor.provider_key,
+            message_uid: messageUid, created_at: createdAt, body: "An ordinary natural-language message" } } });
+        if (candidate.name === "plow_hours_self") tool = candidate;
+      },
+    });
+    assert.ok(tool); return tool;
+  }
+  const start = clockTool("natural-start", "2026-10-02T09:00:00-03:00");
+  await assert.rejects(() => start.execute("invented-time", { action: "start", demand_id: "landing", created_at: "2020-01-01T00:00:00Z" }));
+  await assert.rejects(() => clockTool("owner", "2026-10-02T09:00:00-03:00", { owner: true }).execute("owner-clock", { action: "start", demand_id: "landing" }), /contractor's own/);
+  await assert.rejects(() => clockTool("wrong", "2026-10-02T09:00:00-03:00", { handle: "+15550000003" }).execute("wrong-clock", { action: "start", demand_id: "landing" }), /source does not match/);
+  await assert.rejects(() => clockTool("expired", "2026-10-02T09:00:00-03:00", { stale: true }).execute("expired-clock", { action: "start", demand_id: "landing" }), /Expired turn/);
+  await start.execute("first-call", { action: "start", demand_id: "landing" });
+  await start.execute("another-call-id", { action: "start", demand_id: "landing" });
+  assert.equal(ledger.report("ana")[0]?.entries.length, 1);
+  assert.equal(ledger.report("ana")[0]?.open_entry?.start_ms, Date.parse("2026-10-02T09:00:00-03:00"));
+  await clockTool("natural-stop", "2026-10-02T11:30:00-03:00").execute("stop-call", { action: "stop", details: "commit abc123" });
+  await start.execute("late-replay", { action: "start", demand_id: "landing" });
+  assert.equal(ledger.report("ana")[0]?.entries.length, 1);
+  assert.equal(ledger.report("ana")[0]?.total_hours, 2.5);
+  assert.equal(ledger.report("ana")[0]?.open_entry, null);
 });

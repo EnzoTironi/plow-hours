@@ -1,8 +1,9 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import { billingReportSchema, billingRequestSchema, HoursBilling, selfSchema } from "./hours-billing.ts";
 
 export const hoursEnabled = () => process.env.PLOW_HOURS === "1";
 const id = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
@@ -33,6 +34,8 @@ export const managementSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("link_sheet"), contractor_id: id, sheet_id: z.string().regex(/^[A-Za-z0-9_-]{10,200}$/) }).strict(),
   z.object({ action: z.literal("projected"), contractor_id: id, target: z.enum(["sheet", "wiki"]),
     sheet_id: z.string().optional(), revision: z.number().int().min(1) }).strict(),
+  billingRequestSchema,
+  billingReportSchema,
 ]);
 export type Management = z.infer<typeof managementSchema>;
 
@@ -64,10 +67,14 @@ export const SHEET_HEADERS = ["Day", "Start", "Finish", "Total (Hours)", "Rate (
 
 export class HoursLedger {
   private readonly db: DatabaseSync;
+  private readonly billing: HoursBilling;
 
   constructor(directory: string) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(join(directory, "hours.sqlite"));
+    const path = join(directory, "hours.sqlite");
+    closeSync(openSync(path, "a", 0o600));
+    chmodSync(path, 0o600);
+    this.db = new DatabaseSync(path);
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA synchronous=FULL;
@@ -94,9 +101,46 @@ export class HoursLedger {
       CREATE TABLE IF NOT EXISTS receipts (source TEXT PRIMARY KEY, response TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY, source TEXT NOT NULL, action TEXT NOT NULL, before_json TEXT, after_json TEXT NOT NULL);
     `);
+    this.billing = new HoursBilling(this.db);
   }
 
   close() { this.db.close(); }
+
+  groupContractor(chatUid: string) {
+    const row = this.db.prepare("SELECT * FROM contractors WHERE chat_uid = ?").get(chatUid);
+    return row ? contractorSchema.parse(row) : undefined;
+  }
+
+  billingReport(contractorId: string) {
+    this.contractor(contractorId);
+    return this.billing.report(contractorId);
+  }
+
+  self(raw: unknown, contractorId: string, source: string) {
+    const input = selfSchema.parse(raw);
+    this.contractor(contractorId);
+    if (input.action === "start" || input.action === "stop") throw new Error("Clock actions require a verified inbound contractor message.");
+    if (input.action === "report") {
+      const report = this.report(contractorId)[0];
+      if (!report) throw new Error("Contractor is not registered.");
+      return { contractor: { id: report.contractor.id, name: report.contractor.name, timezone: report.contractor.timezone },
+        demands: report.demands, total_hours: report.total_hours,
+        clock_commands: { start: report.demands.map(demand => `comecei ${demand.id}`), stop: "parei <optional details>", status: "ponto",
+          historical_changes: "Only the owner can correct exact past timestamps in the private DM." },
+        clock_language: "Natural language is supported: identify the assigned demand, then use start or stop. Ambiguous, future, negative or historical statements must not change the clock.",
+        entries: report.entries.map(({ demand_id, start_ms, end_ms, details }) => ({ demand_id, start_ms, end_ms, details })),
+        billing: this.billingReport(contractorId) };
+    }
+    return this.transaction(() => {
+      const key = `member:${source}`;
+      const old = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(key);
+      if (old) return JSON.parse(receiptSchema.parse(old).response);
+      const result = this.billing.submit(contractorId, input);
+      this.audit(source, input.action, undefined, { contractor_id: contractorId, action: input.action, received: true });
+      this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?)").run(key, JSON.stringify(result));
+      return result;
+    });
+  }
 
   private transaction<T>(work: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -135,8 +179,8 @@ export class HoursLedger {
       AND start_ms < ? AND (end_ms IS NULL OR end_ms > ?)`).get(contractorId, except, end ?? Number.MAX_SAFE_INTEGER, start);
   }
 
-  clock(input: { line_uid: string; chat_uid: string; handle: string; message_uid: string; created_at: string; body: string }): string | undefined {
-    const command = clockCommand(input.body);
+  clock(input: { line_uid: string; chat_uid: string; handle: string; message_uid: string; created_at: string; body: string }, intent?: NonNullable<ReturnType<typeof clockCommand>>): string | undefined {
+    const command = intent ?? clockCommand(input.body);
     if (!command) return undefined;
     // A registration is a narrow grant for this sender in this thread, independent of room trust.
     const row = this.db.prepare("SELECT * FROM contractors WHERE handle = ? AND chat_uid = ?")
@@ -183,6 +227,7 @@ export class HoursLedger {
   manage(raw: unknown, source: string) {
     const input = managementSchema.parse(raw);
     if (input.action === "report") return this.report(input.contractor_id);
+    if (input.action === "billing_report") return this.billingReport(input.contractor_id);
     return this.transaction(() => {
       const receiptKey = `owner:${source}`;
       const receipt = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(receiptKey);
@@ -191,6 +236,12 @@ export class HoursLedger {
         return response;
       }
       const apply = () => { switch (input.action) {
+        case "billing_request": {
+          this.contractor(input.contractor_id);
+          const result = this.billing.request(input);
+          this.audit(source, input.action, undefined, input);
+          return { ...result, chat_uid: this.contractor(input.contractor_id).chat_uid };
+        }
         case "contractor": {
           new Intl.DateTimeFormat("en", { timeZone: input.timezone });
           const handle = normalizeHandle(input.handle);
