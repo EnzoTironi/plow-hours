@@ -76,6 +76,19 @@ function render() {
     const title = element('div', person.name, 'profile-title');
     title.append(element('span', `${money.format(person.rate_usd)} / hour`));
     node.append(title, element('p', person.timezone));
+    if (!person.active) node.append(element('p', 'Inactive · History retained'));
+    if (person.review_needed) node.append(element('p', 'A session needs your review before billing.'));
+    const billing = person.billing;
+    if (billing?.requested) {
+      const label = billing.approved ? 'Approved · Pay manually after your checks'
+        : billing.unresolved_clocks ? 'Clock messages pending · Check the private chat'
+        : !billing.closed ? 'Billing period is open'
+        : billing.discrepancy_cents !== null && billing.discrepancy_cents !== 0 ? 'Invoice amount needs your review'
+        : billing.ready_for_owner_review ? 'Ready for your approval in the private chat'
+        : 'Period closed · Waiting for matching paperwork';
+      node.append(element('p', label));
+      if (billing.expected) node.append(element('p', `${new Intl.NumberFormat('en-US', { style: 'currency', currency: billing.expected.currency }).format(billing.expected.amount_cents / 100)} · ${number.format(billing.expected.total_hours)} hours in the closed period`));
+    }
     return node;
   }));
   const query = new URLSearchParams();
