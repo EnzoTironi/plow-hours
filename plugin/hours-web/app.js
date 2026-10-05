@@ -57,7 +57,7 @@ function render() {
   $('empty').querySelector('p').textContent = valid ? (snapshot.contractors.length ? 'Hours appear when a contractor stops their clock. Try clearing the filters.' : 'Register a contractor and their assigned work with the agent to get started.') : 'The end date must be on or after the start date.';
   $('row-count').textContent = `${closed.length} completed ${closed.length === 1 ? 'session' : 'sessions'}`;
   $('download').disabled = !$('contractor').value || !closed.length || !valid || dates() !== dates(snapshot.date_range);
-  $('export-hint').textContent = $('contractor').value ? ($('from').value || $('to').value ? 'Hours include only time inside the selected dates, using the contractor’s timezone. Partial sessions retain their original times in Details.' : 'Dates and rates follow each session’s recorded timezone and hourly rate.') : 'Choose a contractor to download their timesheet. Date filters include time worked inside the selected dates.';
+  $('export-hint').textContent = $('contractor').value ? ($('from').value || $('to').value ? 'Hours include only time inside the selected dates, using the contractor’s billing timezone. Partial sessions retain their original times in Details.' : 'Dates and rates follow each session’s recorded timezone and hourly rate.') : 'Choose a contractor to download their timesheet. Date filters include time worked inside the selected dates.';
   $('demands').replaceChildren(...people.flatMap(person => person.demands.filter(demand => !$('project').value || demand.project === $('project').value).map(demand => {
     const node = element('div', undefined, 'demand');
     const title = element('div', undefined, 'demand-title');
@@ -116,7 +116,7 @@ function billingTotal(billing) {
   const amount = new Intl.NumberFormat('en-US', { style: 'currency', currency: billing.expected.currency }).format(billing.expected.amount_cents / 100);
   const unit = billing.expected.total_hours === 1 ? 'hour' : 'hours';
   const period = billing.period_start === billing.period_end ? billing.period_start : `${billing.period_start} to ${billing.period_end}`;
-  return `${amount} · ${number.format(billing.expected.total_hours)} ${unit} for ${period}, including all projects`;
+  return `${amount} · ${number.format(billing.expected.total_hours)} ${unit} for ${period} in ${billing.expected.timezone}, including all projects`;
 }
 function dates(range) {
   const query = new URLSearchParams();
