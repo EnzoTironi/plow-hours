@@ -83,6 +83,10 @@ export class HoursBilling {
     const closed = this.db.prepare("SELECT * FROM billing_closures WHERE id = ?").get(this.periodId(row));
     return closed ? closureSchema.parse(closed) : undefined;
   }
+  hasStoredApproval(contractorId: string) {
+    const row = this.row(contractorId);
+    return Boolean(row && this.closure(row)?.approval_digest);
+  }
   private preview(row: z.infer<typeof rowSchema>) {
     const timezone = z.object({ timezone: text }).parse(this.db.prepare("SELECT timezone FROM contractors WHERE id = ?").get(row.contractor_id)).timezone;
     const bounds = periodBounds(row.period_start, row.period_end, timezone);

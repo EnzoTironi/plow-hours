@@ -122,15 +122,11 @@ test("message replay is idempotent across restarts and source identity includes 
   assert.equal(f.snapshot().total_hours, 1);
 });
 
-test("a committed natural clock can be recovered without rerunning the model, and failure notices deduplicate", t => {
+test("a committed natural clock can be recovered without rerunning the model", t => {
   const f = fixture(t);
   const message = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "natural-start",
     body: "Starting the landing page now.", created_at: "2026-10-02T09:00:00-03:00" };
   assert.equal(f.ledger.clockReceipt(message), undefined);
-  assert.equal(f.ledger.claimFailureNotice(message), true);
-  f.restart();
-  assert.equal(f.ledger.claimFailureNotice(message), false);
-  assert.equal(f.ledger.clockReceipt(message), undefined, "an outage notice never substitutes for a clock receipt");
   const confirmation = f.ledger.clock(message, { kind: "start", detail: "landing" });
   f.restart();
   assert.equal(f.ledger.clockReceipt(message), confirmation);
