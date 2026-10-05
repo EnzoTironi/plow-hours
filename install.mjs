@@ -15,7 +15,7 @@ if (!membersLine) throw new Error('Pinned Plow group members contract changed');
 const phonePattern = JSON.stringify('^\\+[1-9][0-9]{1,14}$');
 entry=replaceOnce(entry,membersLine,`          members: { type: "array", minItems: 1, items: { type: "string", anyOf: [{ pattern: ${phonePattern} }, { format: "email" }] }, description: "International phone numbers or iMessage email handles. The owner is included automatically." },`);
 entry=replaceOnce(entry,'Accepts phone numbers, not chat ids or email addresses.','Accepts international phone numbers or iMessage email handles, never chat IDs.');
-entry='import { clockHours, contractorGroupPrompt, groupAttentionPrompt, hoursGroup, registerHours } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\n'+entry;
+entry='import { clockHours, contractorGroupPrompt, hoursGroup, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\n'+entry;
 const route='  const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });';
 entry=replaceOnce(entry,route,route+`\n  const confirmation = clockHours({ account, chat, message, senderIsOwner });
   if (confirmation !== undefined) {
@@ -59,13 +59,12 @@ entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdopt
 const preparePayload='      preparePayload: (payload, info) => {';
 entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursRestricted && payload.isError) {
           failure = new Error("Contractor turn could not complete");
-          const source = ctxPayload.GatewayRunToolBindings?.plowHoursClock;
-          if (source && !hoursLedger().claimFailureNotice(clockSourceSchema.parse(source))) return null;
-          return { ...payload, text: "Não consegui processar sua mensagem agora. Ela ficou pendente, e vou tentar novamente com o horário original. Não confirmei nenhuma alteração neste aviso.", replyToId: undefined, replyToCurrent: false };
+          if (kind === "group") return null;
+          return { ...payload, text: "Não consegui processar sua mensagem agora. Tente novamente. Não confirmei nenhuma alteração neste aviso.", replyToId: undefined, replyToCurrent: false };
         }`);
 entry=replaceOnce(entry,prompt,prompt+`\n      ...(hoursRestricted ? { groupSystemPrompt: hoursContractor
         ? contractorGroupPrompt(hoursContractor.id)
-        : (kind === "group" ? groupAttentionPrompt + "\\n" : "") + "You are Plow Hours. This is not an authorized contractor group. You have no access to contractor records or owner data here. When someone addresses you for help, ask them to use the group containing the owner, this agent and that registered contractor. Do not register, grant permissions, change records or disclose other conversations." } : {}),`);
+        : unavailableGroupPrompt(chat, kind === "group") } : {}),`);
 entry=replaceOnce(entry,'...(!email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),','...(hoursRestricted ? { disableTools: !hoursContractor } : !email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),');
 entry=replaceOnce(entry,'if (api.registrationMode === "full") api.logger.info("plow channel registered");',`if (api.registrationMode === "full") {
       registerHoursWeb(api);
@@ -80,7 +79,9 @@ entry=replaceOnce(entry,'  registerCapabilities(api) {',`  registerCapabilities(
 await writeFile(plugin+'/index.ts',entry);
 
 let transport=await readFile(plugin+'/transport.ts','utf8');
-transport='import { hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\n'+transport;
+transport='import { hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+transport;
+transport=replaceOnce(transport,'      const listing = await request<Page<Chat>>(account, "/chats");','      await flushHoursNotices(account).catch(() => log("Plow Hours owner alert is pending; delivery will retry."));\n      const listing = await request<Page<Chat>>(account, "/chats");');
+transport=replaceOnce(transport,'      heartbeat = setInterval(() => {','      heartbeat = setInterval(() => {\n        void flushHoursNotices(account).catch(() => log("Plow Hours owner alert is pending; delivery will retry."));');
 const dispatch='  const dispatchTurn = async ({ chat, message }: Queued, onSubmitted: () => void) => {';
 transport=replaceOnce(transport,dispatch,dispatch+`\n    const hoursTurn = hoursEnabled() && account.accountId === "chat" && !!hoursLedger().groupContractor(chat.uid);`);
 transport=replaceOnce(transport,'onAdopted: () => acknowledge("adoption")','onAdopted: () => hoursTurn ? Promise.resolve() : acknowledge("adoption")');
@@ -168,6 +169,7 @@ for (const [source,destination] of [
   [plugin+'/hours-billing.ts',plugin+'/dist/hours-billing.js'],
   [plugin+'/hours-period.ts',plugin+'/dist/hours-period.js'],
   [plugin+'/hours-channel.ts',plugin+'/dist/hours-channel.js'],
+  [plugin+'/hours-notifications.ts',plugin+'/dist/hours-notifications.js'],
   [plugin+'/hours-web.ts',plugin+'/dist/hours-web.js'],
   ['/opt/plow/boot/config.ts','/opt/plow/boot/config.js'],
   ['/opt/plow/boot/identity.ts','/opt/plow/boot/identity.js'],

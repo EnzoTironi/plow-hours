@@ -51,6 +51,29 @@ test("received paperwork is not approval; invoice mismatch is explicit and chang
   assert.throws(() => f.ledger.manage({ action: "mark_paid", contractor_id: "ana" }, "mark-paid"));
 });
 
+test("a contractor changing approved payment instructions saves one owner alert atomically and survives restart", t => {
+  const f = fixture(t); f.request(); f.manual(); f.invoice(); f.pix(); f.close();
+  assert.deepEqual(f.ledger.pendingOwnerNotices(), []);
+  f.ledger.manage({ action: "approve_billing", contractor_id: "ana", fingerprint: f.report().fingerprint }, "owner-approve");
+  f.ledger.rememberClockMessage({ line_uid: "line", chat_uid: "cht_ana", handle: "ana@example.test", message_uid: "incoming-docs", created_at: "2026-10-03T09:00:00Z", body: "Here are my updated instructions" });
+  assert.equal(f.report().approved, false, "the incoming message temporarily blocks readiness before its actual changes are processed");
+  f.ledger.self({ action: "payment_details", payment: { method: "pix", beneficiary: "Ana Silva", document_url: "https://private.example.test/pix.pdf" } }, "ana", "unchanged-docs");
+  assert.deepEqual(f.ledger.pendingOwnerNotices(), [], "an unchanged resubmission is not a revocation");
+  f.pix("Ana Novo", "https://private.example.test/new.pdf");
+  assert.equal(f.report().approved, false);
+  f.pix("Ana Novo", "https://private.example.test/new.pdf");
+  const notices = f.ledger.pendingOwnerNotices();
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]?.name, "Ana");
+  const reopened = new HoursLedger(f.directory);
+  try {
+    assert.deepEqual(reopened.pendingOwnerNotices(), notices);
+    assert.ok(notices[0]);
+    reopened.completeOwnerNotice(notices[0].source);
+    assert.deepEqual(reopened.pendingOwnerNotices(), []);
+  } finally { reopened.close(); }
+});
+
 test("closed periods reject edits, voids and backdated additions until reopening with a reason", t => {
   const f = fixture(t); f.request(); f.manual(); f.invoice(); f.pix(); f.close();
   const entry = f.ledger.report("ana")[0]!.entries[0]!;

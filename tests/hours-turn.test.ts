@@ -118,8 +118,9 @@ test("optional clock shortcuts commit and confirm without any model or Mac call"
     } },
   });
   assert.ok(channel);
-  await channel.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } });
-  assert.equal(posts.length, 2, JSON.stringify(posts));
+  const logs: string[] = [];
+  await channel.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(value: string) { logs.push(value); } } });
+  assert.equal(posts.length, 2, JSON.stringify({ posts, logs }));
   assert.ok(posts.every(post => post.path === `/v1/chats/${group.uid}/messages`));
   assert.match(posts[0]?.body ?? "", /Ponto iniciado/);
   assert.match(posts[1]?.body ?? "", /2.5 h/);

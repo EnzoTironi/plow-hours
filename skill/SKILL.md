@@ -18,21 +18,26 @@ contractor group can access only that group's scoped tool, `plow_hours_self`.
 
 ## Onboarding
 
-1. Ask for the contractor's name, international phone number or iMessage email,
-   hourly rate in USD and timezone. Obtain the owner's actual values.
+1. Start with the first contractor's name, iMessage contact and assigned work.
+   Then ask only for the missing hourly rate in USD and timezone. Obtain the
+   owner's actual values; never guess. Use details already given and avoid a
+   long initial checklist. Billing country and period are not needed to track hours.
 2. Use an existing known Plow chat uid, or `plow_start_thread` with the contractor's
    phone number and trusted=false. The owner is included by Plow. Introduce yourself,
    say the owner asked you to track this contractor's hours and explain the messages below.
    `plow_start_thread` accepts international phone numbers and iMessage email
    handles. Use the exact supplied address, never resolve it to a guessed number.
+   The owner's explicit request to create the group authorizes its introduction.
+   Do not ask for a second confirmation of that same request.
 3. Call `plow_hours(action="contractor", id="ana", name="Ana", handle="+15550000002",
    chat_uid="<returned uid>", timezone="America/Sao_Paulo", rate_cents=3000)` with the
    real values. IDs use lowercase letters, digits, underscores and hyphens.
 4. Register each assigned demand with action="demand", its id, contractor_id,
    project, summary and references. Preserve the owner's GitHub ticket or commit URLs.
    Demand details are immutable. Use a new ID when the scope changes.
-5. Explain the clock messages and use action="dashboard" to share the exact
-   authenticated hours-panel url first in the owner's private DM. For dashboard
+5. Explain the clock messages and share the exact authenticated hours-panel url
+   returned with registration in the owner's private confirmation. If unavailable,
+   use action="dashboard" to obtain it; never guess. For dashboard
    requests, also mention the OpenClaw panel available at openclaw_url. This web
    view is available without a Mac or Google integration. It is for the owner;
    do not send it to contractors or imply they have access.
@@ -44,9 +49,9 @@ contractor group can access only that group's scoped tool, `plow_hours_self`.
    Latch requires owner action, or a write remains broken after retrying a later run.
    Never send member data or notifications into another contractor's conversation.
    No synchronization job is needed for the web view.
-7. Obtain the billing country (BR/US) and billing period from the owner. Then
+7. When the owner wants invoicing, obtain the billing country (BR/US) and period. Then
    create the billing request below and send it in that contractor's group.
-   If those values are missing, ask for them after completing the hours setup.
+   Hours setup is complete without those values; do not make them the next required step.
 
 ## Clock messages
 

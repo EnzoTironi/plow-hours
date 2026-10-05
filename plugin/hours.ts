@@ -116,6 +116,10 @@ export class HoursLedger {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS one_open_entry ON entries(contractor_id) WHERE end_ms IS NULL;
       CREATE TABLE IF NOT EXISTS receipts (source TEXT PRIMARY KEY, response TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS owner_notices (
+        source TEXT PRIMARY KEY, contractor_id TEXT NOT NULL REFERENCES contractors(id),
+        delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1))
+      );
       CREATE TABLE IF NOT EXISTS pending_starts (
         contractor_id TEXT PRIMARY KEY REFERENCES contractors(id), source_json TEXT NOT NULL,
         rate_cents INTEGER NOT NULL, timezone TEXT NOT NULL
@@ -190,7 +194,9 @@ export class HoursLedger {
       const key = `member:${source}`;
       const old = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(key);
       if (old) return JSON.parse(receiptSchema.parse(old).response);
+      const approved = this.billing.hasStoredApproval(contractorId);
       const result = this.billing.submit(contractorId, input);
+      if (approved && !this.billing.hasStoredApproval(contractorId)) this.db.prepare("INSERT INTO owner_notices(source, contractor_id) VALUES (?, ?) ON CONFLICT DO NOTHING").run(key, contractorId);
       this.audit(source, input.action, undefined, { contractor_id: contractorId, action: input.action, received: true });
       this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?)").run(key, JSON.stringify(result));
       return result;
@@ -361,9 +367,13 @@ export class HoursLedger {
     return receipt ? receiptSchema.parse(receipt).response : undefined;
   }
 
-  claimFailureNotice(input: ClockSource): boolean {
-    const source = `failure-notice:${JSON.stringify([input.line_uid, input.chat_uid, input.message_uid])}`;
-    return Boolean(this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, '') ON CONFLICT DO NOTHING").run(source).changes);
+  pendingOwnerNotices() {
+    return this.db.prepare("SELECT source, name FROM owner_notices JOIN contractors ON contractors.id=owner_notices.contractor_id WHERE delivered=0 ORDER BY owner_notices.rowid")
+      .all().map(row => z.object({ source: text, name: text }).parse(row));
+  }
+
+  completeOwnerNotice(source: string) {
+    this.db.prepare("UPDATE owner_notices SET delivered=1 WHERE source=?").run(source);
   }
 
   clock(input: ClockSource, intent?: ClockIntent): string | undefined {
