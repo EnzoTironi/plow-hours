@@ -15,7 +15,7 @@ if (!membersLine) throw new Error('Pinned Plow group members contract changed');
 const phonePattern = JSON.stringify('^\\+[1-9][0-9]{1,14}$');
 entry=replaceOnce(entry,membersLine,`          members: { type: "array", minItems: 1, items: { type: "string", anyOf: [{ pattern: ${phonePattern} }, { format: "email" }] }, description: "International phone numbers or iMessage email handles. The owner is included automatically." },`);
 entry=replaceOnce(entry,'Accepts phone numbers, not chat ids or email addresses.','Accepts international phone numbers or iMessage email handles, never chat IDs.');
-entry='import { clockHours, contractorGroupPrompt, hoursGroup, registerHours } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\n'+entry;
+entry='import { clockHours, contractorGroupPrompt, groupAttentionPrompt, hoursGroup, registerHours } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\n'+entry;
 const route='  const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });';
 entry=replaceOnce(entry,route,route+`\n  const confirmation = clockHours({ account, chat, message, senderIsOwner });
   if (confirmation !== undefined) {
@@ -55,6 +55,7 @@ entry=replaceOnce(entry,'  const body = message.body ||', '  const body = (hours
 entry=replaceOnce(entry,'      body: m.body, timestamp:', '      body: hoursRestricted ? workText(m.body) : m.body, timestamp:');
 entry=replaceOnce(entry,'body: message.reply_to.body, sender:', 'body: hoursRestricted ? workText(message.reply_to.body) : message.reply_to.body, sender:');
 const prompt='      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),';
+entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdoptionLifecycle: ingress,\n      ...(hoursRestricted && kind === "group" ? { suppressTyping: true } : {}),');
 const preparePayload='      preparePayload: (payload, info) => {';
 entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursRestricted && payload.isError) {
           failure = new Error("Contractor turn could not complete");
@@ -64,7 +65,7 @@ entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursRestri
         }`);
 entry=replaceOnce(entry,prompt,prompt+`\n      ...(hoursRestricted ? { groupSystemPrompt: hoursContractor
         ? contractorGroupPrompt(hoursContractor.id)
-        : "You are Plow Hours. This is not an authorized contractor group. You have no access to contractor records or owner data here. Ask the person to use the group containing the owner, this agent and that registered contractor. Do not register, grant permissions, change records or disclose other conversations." } : {}),`);
+        : (kind === "group" ? groupAttentionPrompt + "\\n" : "") + "You are Plow Hours. This is not an authorized contractor group. You have no access to contractor records or owner data here. When someone addresses you for help, ask them to use the group containing the owner, this agent and that registered contractor. Do not register, grant permissions, change records or disclose other conversations." } : {}),`);
 entry=replaceOnce(entry,'...(!email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),','...(hoursRestricted ? { disableTools: !hoursContractor } : !email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),');
 entry=replaceOnce(entry,'if (api.registrationMode === "full") api.logger.info("plow channel registered");',`if (api.registrationMode === "full") {
       registerHoursWeb(api);
@@ -128,6 +129,8 @@ config=replaceOnce(config,'  const name = identity.agent?.name;','  const name =
 config=replaceOnce(config,'"plow_send_email"]','"plow_send_email", ...(process.env.PLOW_HOURS === "1" ? ["plow_hours", "plow_hours_self"] : [])]');
 config=replaceOnce(config,'"automations", "read", "write", "edit", "exec",', '"automations",');
 config=replaceOnce(config,'deny: ["ask_user"]', 'deny: ["ask_user", "exec", "read", "write", "edit", "apply_patch"]');
+config=replaceOnce(config,'    channels: { plow: {','    surfaces: { plow: { silentReply: { group: "allow" } } },\n    channels: { plow: {');
+config=replaceOnce(config,'  ["plow-channel", ["channels", "plow"]],','  ["plow-channel", ["channels", "plow"]],\n  ["plow-silent-reply", ["surfaces", "plow", "silentReply"]],');
 await writeFile('/opt/plow/boot/config.ts',config);
 let identity=await readFile('/opt/plow/boot/identity.ts','utf8');
 identity=replaceOnce(identity,'      if (!identity.line.uid)',`      if (process.env.PLOW_HOURS === "1") {

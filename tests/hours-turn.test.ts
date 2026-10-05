@@ -5,7 +5,7 @@ import { z } from "zod";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import entry from "../plugin/index.ts";
 import { hoursLedger } from "../plugin/hours.ts";
-import { hoursGroup } from "../plugin/hours-channel.ts";
+import { clockHours, hoursGroup } from "../plugin/hours-channel.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 import { listen, type Account, type Chat, type Message } from "../plugin/transport.ts";
 
@@ -198,6 +198,23 @@ test("the scoped tool binds both the live roster and sender; owner DM, another g
   }
   assert.ok(hoursGroup(account, group));
   assert.equal(hoursGroup(account, { ...group, participants: [...group.participants, contractor] }), undefined);
+});
+
+test("changed membership does not interrupt human conversations or run clock shortcuts", async t => {
+  await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  const ledger = hoursLedger();
+  ledger.manage(profile, "changed-group-profile");
+  const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line" };
+  const chat: Chat = { ...group, participants: [...group.participants, contractor] };
+  for (const body of ["Dane, pode preencher o horário?", "/in landing", "/out"]) {
+    const message: Message = { uid: body, body, sender: contractor, direction: "inbound", created_at: "2026-10-05T09:00:00Z", attachments: [] };
+    assert.equal(clockHours({ account, chat, message, senderIsOwner: false }), undefined);
+  }
+  assert.equal(ledger.report("ana")[0]?.entries.length, 0);
+  assert.deepEqual(ledger.pendingClockMessages("line", group.uid), []);
 });
 
 test("natural clock tools bind the provider timestamp and message UID, never the model's arguments or the owner's identity", async t => {

@@ -50,6 +50,13 @@ contractor group can access only that group's scoped tool, `plow_hours_self`.
 
 ## Clock messages
 
+Participate only when the group message is intended for you: a mention, a reply
+to your question, a clear request for help, or the contractor's own clock, work
+note or requested document submitted for recording. A natural clock report needs
+no mention. A message addressed to another human stays between them, even when
+it concerns hours. Greetings, thanks and casual conversation need no reply.
+For those messages, use NO_REPLY without tools or a permission explanation.
+
 Contractors speak naturally in their registered group: "comecei a trabalhar na
 landing", "vou fazer uma pausa agora", "voltei para a landing" or "terminei por
 hoje". Interpret the current intention, consult `plow_hours_self(action="report")`
