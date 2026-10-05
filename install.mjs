@@ -123,6 +123,7 @@ config=replaceOnce(config,'  const name = identity.agent?.name;', `  const owner
   }
   const name = identity.agent?.name;`);
 config=replaceOnce(config,'userHeader: "x-plow-user", allowLoopback: true,','userHeader: "x-plow-user", allowLoopback: true, allowUsers: [...ownerUids, ...(process.env.PLOW_HOURS_LOCAL === "1" ? ["dev-owner"] : [])],');
+config=replaceOnce(config,'controlUi: { enabled: true,','controlUi: { basePath: "/openclaw", enabled: true,');
 config=replaceOnce(config,'  const name = identity.agent?.name;','  const name = process.env.AGENT_NAME ?? identity.agent?.name;');
 config=replaceOnce(config,'"plow_send_email"]','"plow_send_email", ...(process.env.PLOW_HOURS === "1" ? ["plow_hours", "plow_hours_self"] : [])]');
 config=replaceOnce(config,'"automations", "read", "write", "edit", "exec",', '"automations",');
@@ -141,6 +142,14 @@ identity=replaceOnce(identity,'      if (!identity.line.uid)',`      if (process
       }
       if (!identity.line.uid)`);
 await writeFile('/opt/plow/boot/identity.ts',identity);
+let bootPrompt=await readFile('/opt/plow/boot/prompt.ts','utf8');
+bootPrompt=replaceOnce(bootPrompt,[
+  '  const dashboard = webUrl',
+  '    ? `\\nYour dashboard is ${webUrl}. Give that exact address when asked; never guess a dashboard URL.\\n`',
+  '    : "\\nYou have no dashboard. Say so when asked for its URL; never guess one.\\n";',
+  '  const rendered = `${prompt}\\nThread trust: ${instruction}\\n${dashboard}`;',
+].join('\n'),'  const rendered = `${prompt}\\nThread trust: ${instruction}\\n`;');
+await writeFile('/opt/plow/boot/prompt.ts',bootPrompt);
 let probeFixture=await readFile('/opt/plow/boot/probe-fixture.ts','utf8');
 probeFixture=replaceOnce(probeFixture,'export const probeIdentity: Identity = {','export const probeIdentity: Identity = {\n  owner_uid: "mem_probe",');
 await writeFile('/opt/plow/boot/probe-fixture.ts',probeFixture);
@@ -159,6 +168,7 @@ for (const [source,destination] of [
   [plugin+'/hours-web.ts',plugin+'/dist/hours-web.js'],
   ['/opt/plow/boot/config.ts','/opt/plow/boot/config.js'],
   ['/opt/plow/boot/identity.ts','/opt/plow/boot/identity.js'],
+  ['/opt/plow/boot/prompt.ts','/opt/plow/boot/prompt.js'],
   ['/opt/plow/boot/probe-fixture.ts','/opt/plow/boot/probe-fixture.js'],
 ]) {
   const text=await readFile(source,'utf8');

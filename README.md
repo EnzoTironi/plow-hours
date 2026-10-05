@@ -41,6 +41,9 @@ the account shown by `profile --show` before deploying. Text the line, then open
 owner access to local visitors and is for development. Keep it bound to loopback.
 Cloud deployments use Plow’s authenticated owner proxy on port 3000; the image
 accepts only the installation’s owner identity.
+Ask for the dashboard in your private conversation. The agent gets the current
+address from Plow, and that address opens your hours panel. `/hours` also works;
+the OpenClaw control interface lives separately at `/openclaw/`.
 
 The persistent hours volume is bound to its first Plow owner and line. Boot
 refuses a different account or line rather than sharing the old owner’s records.

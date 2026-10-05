@@ -14,9 +14,9 @@ let success=false;
 const deadline=setTimeout(()=>{console.error('Plow Hours probe timed out');process.kill(process.pid,'SIGTERM');},120000);
 let log='';
 let checking=false;
-const paths=['','/data','/app.js','/style.css','/plow-logo.svg','/fonts/dm-sans-latin.woff2','/fonts/dm-mono-400-latin.woff2','/fonts/epilogue-latin-500-normal.woff2'];
+const paths=['/','/hours','/hours/data','/hours/app.js','/hours/style.css','/hours/plow-logo.svg','/hours/fonts/dm-sans-latin.woff2','/hours/fonts/dm-mono-400-latin.woff2','/hours/fonts/epilogue-latin-500-normal.woff2'];
 async function check() {
-  const base='http://127.0.0.1:3000/hours';
+  const base='http://127.0.0.1:3000';
   for (const path of paths) {
     const response=await fetch(base+path,{signal:AbortSignal.timeout(5000)});
     if (![401,403].includes(response.status)) throw new Error('Anonymous access: '+path+' '+response.status);
@@ -26,14 +26,19 @@ async function check() {
     for (const path of paths) {
       const response=await fetch(base+path,{headers,signal:AbortSignal.timeout(5000)});
       if (response.status!==200) throw new Error('Owner access: '+path+' '+response.status);
-      if (path==='/data'&&!Array.isArray((await response.json()).contractors)) throw new Error('Missing timesheet data');
+      if (path==='/hours/data'&&!Array.isArray((await response.json()).contractors)) throw new Error('Missing timesheet data');
+      if (path==='/'&&!(await response.text()).includes('<title>Plow Hours')) throw new Error('Default dashboard is not the hours panel');
     }
-    const response=await fetch(base+'/data',{method:'POST',headers,signal:AbortSignal.timeout(5000)});
+    const control=await fetch(base+'/openclaw/',{headers,signal:AbortSignal.timeout(5000)});
+    if (control.status!==200 || !(await control.text()).includes('OpenClaw')) throw new Error('Control UI moved incorrectly');
+    const response=await fetch(base+'/hours/data',{method:'POST',headers,signal:AbortSignal.timeout(5000)});
     if (response.status!==405) throw new Error('Read-only route: '+response.status);
   }
   for (const user of ['mem_other_owner', 'mem_contractor', 'dev-owner']) {
-    const response=await fetch(base+'/data',{headers:{'x-plow-user':user,'x-forwarded-for':'192.0.2.1'},signal:AbortSignal.timeout(5000)});
-    if (![401,403].includes(response.status)) throw new Error('Wrong owner allowed: '+response.status);
+    for (const path of ['/','/hours/data']) {
+      const response=await fetch(base+path,{headers:{'x-plow-user':user,'x-forwarded-for':'192.0.2.1'},signal:AbortSignal.timeout(5000)});
+      if (![401,403].includes(response.status)) throw new Error('Wrong owner allowed: '+path+' '+response.status);
+    }
   }
   success=true;
   console.log('PLOW_HOURS_PROBE_OK');
