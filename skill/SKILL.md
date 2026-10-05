@@ -32,7 +32,8 @@ contractor group can access only that group's scoped tool, `plow_hours_self`.
    project, summary and references. Preserve the owner's GitHub ticket or commit URLs.
    Demand details are immutable. Use a new ID when the scope changes.
 5. Explain the clock messages and use action="dashboard" to share the exact
-   authenticated hours-panel address in the owner's private DM. This web
+   authenticated hours-panel url first in the owner's private DM. For dashboard
+   requests, also mention the OpenClaw panel available at openclaw_url. This web
    view is available without a Mac or Google integration. It is for the owner;
    do not send it to contractors or imply they have access.
 6. If the owner wants Sheets or wiki projections, set up only those destinations

@@ -199,12 +199,16 @@ try {
   });
   if (process.env.EVAL_PHASE === 'dashboard') {
     const beforeDashboard = dashboardReads;
-    for (const input of ['Me manda o dashboard das horas?', 'Where is my dashboard?']) {
+    for (const input of ['Me manda o dashboard?', 'Me manda o dashboard das horas?', 'Where is my dashboard?']) {
       const turn = await say(owner, home.uid, input);
-      check('Private owner dashboard request returns the canonical deployed address: ' + input, () => {
+      check('Private owner gets hours first and the separate OpenClaw panel without having to complain: ' + input, () => {
         const reply = turn.responses.map(r => r.body).join('\n');
-        assert.ok(reply.includes('https://hours.example.test'));
-        assert.ok(!/localhost|\/openclaw|OpenClaw|Plow Account/i.test(reply));
+        const hoursAt = reply.indexOf('https://hours.example.test/hours');
+        const openclawAt = reply.indexOf('https://hours.example.test/openclaw/');
+        assert.ok(hoursAt >= 0 && openclawAt > hoursAt, 'Hours must be the first dashboard link');
+        assert.equal(reply.search(/https?:\/\//), hoursAt, 'Never send a root or account URL before hours');
+        assert.match(reply, /OpenClaw/i);
+        assert.ok(!/localhost|Plow Account/i.test(reply));
       });
     }
     for (const who of [ana, owner]) {
@@ -215,7 +219,7 @@ try {
       });
     }
     check('Dashboard requests use the real owner tool and do not change hours', () => {
-      assert.ok(dashboardReads >= beforeDashboard + 2, 'The owner tool must fetch the deployed address for each request');
+      assert.ok(dashboardReads >= beforeDashboard + 3, 'The owner tool must fetch the deployed address for each request');
       assert.equal(ledger.report('ana')[0].entries.length, 0);
     });
   } else if (process.env.EVAL_PHASE === 'onboarding') {
