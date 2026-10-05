@@ -32,6 +32,50 @@ test("web snapshot keeps captured times and rates while omitting message sources
   for (const secret of ["+15550000002", "cht_ana", "start_message", "stop_message", "before_json", "sheet_id"]) assert.ok(!JSON.stringify(snapshot).includes(secret));
 });
 
+test("an unconfirmed start is visible before billing is configured and retains its captured timezone", t => {
+  const { ledger } = fixture(t);
+  const source = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "unclear", body: "Starting work", created_at: "2026-10-02T09:00:00-03:00" };
+  ledger.clock(source, { kind: "clarify_start" });
+  ledger.manage({ action: "contractor", id: "ana", name: "Ana", handle: source.handle, chat_uid: source.chat_uid, timezone: "UTC", rate_cents: 5000 }, "timezone-change");
+  const person = hoursWebSnapshot(ledger).contractors[0];
+  assert.ok(person);
+  assert.equal(person.pending_clock.start, source.created_at);
+  assert.equal(person.pending_clock.timezone, "America/Sao_Paulo");
+  assert.equal(person.billing.requested, false);
+  assert.equal(person.entries.length, 0);
+});
+
+test("date windows and billing agree for a session crossing month-end without changing the ledger", t => {
+  const { ledger, clock } = fixture(t);
+  clock("start landing", "2026-10-31T23:00:00-03:00", "month-start");
+  clock("stop", "2026-11-01T01:00:00-03:00", "month-stop");
+  ledger.manage({ action: "billing_request", contractor_id: "ana", country: "BR", period_start: "2026-11-01", period_end: "2026-11-01" }, "november-request");
+  ledger.manage({ action: "close_period", contractor_id: "ana" }, "november-close");
+  const november = hoursWebSnapshot(ledger, { from: "2026-11-01", to: "2026-11-01" }).contractors[0];
+  assert.ok(november?.entries[0]);
+  assert.ok(november.entries[0].end_ms !== null);
+  assert.equal((november.entries[0].end_ms - november.entries[0].start_ms) / 3_600_000, november.billing.expected?.total_hours);
+  assert.equal(november.billing.expected?.total_hours, 1);
+  assert.equal(november.entries[0].start, "2026-11-01 00:00:00 GMT-3");
+  assert.match(november.entries[0].details, /Partial session.*2026-10-31 23:00:00/);
+  const october = hoursWebSnapshot(ledger, { to: "2026-10-31" }).contractors[0];
+  assert.equal(october?.entries[0]?.finish, "2026-11-01 00:00:00 GMT-3");
+  assert.equal(hoursWebSnapshot(ledger, { from: "2026-11-02" }).contractors[0]?.entries.length, 0);
+  assert.equal(ledger.report("ana")[0]?.total_hours, 2);
+});
+
+test("archived tasks leave assigned work while historical rows and project filters remain", t => {
+  const { ledger, clock } = fixture(t);
+  clock("start landing", "2026-10-02T09:00:00-03:00", "archive-start");
+  clock("stop", "2026-10-02T10:00:00-03:00", "archive-stop");
+  ledger.manage({ action: "archive_demand", contractor_id: "ana", demand_id: "landing", reason: "Work completed" }, "archive");
+  const person = hoursWebSnapshot(ledger).contractors[0];
+  assert.ok(person);
+  assert.deepEqual(person.demands, []);
+  assert.deepEqual(person.projects, ["=1+1"]);
+  assert.equal(person.entries[0]?.project, "=1+1");
+});
+
 test("web data reflects a newly closed clock and an owner correction on the next request", async t => {
   const { ledger, clock } = fixture(t);
   const server = createServer(createHoursWebHandler(() => ledger));
@@ -40,6 +84,9 @@ test("web data reflects a newly closed clock and an owner correction on the next
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
+  for (const query of ["from=invalid", "to=2026-02-30", "from=2026-11-02&to=2026-11-01"]) {
+    assert.equal((await fetch(`${base}/hours/data?${query}`)).status, 400);
+  }
   clock("start landing", "2026-10-02T12:00:00Z", "start");
   const open = await fetch(`${base}/hours/data`).then(res => res.json()) as ReturnType<typeof hoursWebSnapshot>;
   assert.equal(open.contractors[0]?.entries[0]?.end_ms, null);

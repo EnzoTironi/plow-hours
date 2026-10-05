@@ -65,7 +65,7 @@ export function clockCommand(body: string) {
   return { kind: "status", detail } as const;
 }
 
-function localTime(ms: number, timezone: string) {
+export function localTime(ms: number, timezone: string) {
   return new Intl.DateTimeFormat("sv-SE", {
     timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", timeZoneName: "shortOffset",
@@ -650,7 +650,7 @@ export class HoursLedger {
       return {
         contractor, demands, entries, total_hours: hours(duration), open_entry: active ?? null,
         review_needed: entries.filter(needsReview).map(e => e.id),
-        pending_clock: { start: this.pendingStart(contractor.id)?.source.created_at ?? null, unmatched_stops: Number(this.db.prepare("SELECT COUNT(*) AS count FROM unmatched_stops WHERE contractor_id=?").get(contractor.id)?.count ?? 0), messages: this.pendingClockMessagesForContractor(contractor.id).length,
+        pending_clock: { start: this.pendingStart(contractor.id)?.source.created_at ?? null, timezone: this.pendingStart(contractor.id)?.timezone ?? null, unmatched_stops: Number(this.db.prepare("SELECT COUNT(*) AS count FROM unmatched_stops WHERE contractor_id=?").get(contractor.id)?.count ?? 0), messages: this.pendingClockMessagesForContractor(contractor.id).length,
           reviews: this.db.prepare("SELECT source, json_extract(source_json, '$.created_at') AS created_at, review_reason FROM clock_inbox WHERE contractor_id=? AND review_reason!='' ORDER BY created_at").all(contractor.id) },
         audit: this.db.prepare("SELECT * FROM audit WHERE COALESCE(json_extract(after_json, '$.contractor_id'), json_extract(after_json, '$.id')) = ? ORDER BY seq").all(contractor.id)
           .map(row => ({ ...row, before_json: row.before_json === null ? null : JSON.stringify(workRecord(JSON.parse(String(row.before_json)), secrets)), after_json: JSON.stringify(workRecord(JSON.parse(String(row.after_json)), secrets)) })),
