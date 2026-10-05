@@ -20,7 +20,7 @@ test("boot keeps the dashboard address out of shared prompts and uses the privat
   }
 });
 
-test("only the verified private owner turn can fetch its current installation's exact dashboard URL", async t => {
+test("only the verified private owner turn can fetch the hours and OpenClaw URLs for its current installation", async t => {
   await websocketFixture(t);
   const previous = process.env.PLOW_HOURS;
   process.env.PLOW_HOURS = "1";
@@ -55,9 +55,14 @@ test("only the verified private owner turn can fetch its current installation's 
       if (scenario !== "stale") assert.equal(identityRequests, before, "denied turns cannot even fetch the private address");
       continue;
     }
-    for (const url of ["https://tenant-one.example.test", "https://tenant-two.example.test/agent/?view=owner#panel", "http://localhost:3331/"]) {
+    for (const [url, hoursUrl, openclawUrl] of [
+      ["https://tenant-one.example.test", "https://tenant-one.example.test/hours", "https://tenant-one.example.test/openclaw/"],
+      ["https://tenant-two.example.test/agent/?view=owner#panel", "https://tenant-two.example.test/agent/hours?view=owner#panel", "https://tenant-two.example.test/agent/openclaw/?view=owner#panel"],
+      ["https://tenant-three.plow.run/", "https://tenant-three.plow.run/hours", "https://tenant-three.plow.run/openclaw/"],
+      ["http://localhost:3331/", "http://localhost:3331/hours", "http://localhost:3331/openclaw/"],
+    ]) {
       webUrl = url;
-      const details = { url, view: "hours", owner_only: true };
+      const details = { url: hoursUrl, openclaw_url: openclawUrl, view: "hours", owner_only: true };
       assert.deepEqual(await tool.execute("dashboard", { action: "dashboard" }), { content: [{ type: "text", text: JSON.stringify(details) }], details });
     }
     await assert.rejects(() => tool.execute("injected-url", { action: "dashboard", url: "https://other.example.test" }));

@@ -1,7 +1,7 @@
 services:
   agent:
     build: .
-    image: ghcr.io/enzotironi/plow-hours:v5.3
+    image: ghcr.io/enzotironi/plow-hours:v5.4
     env_file: ./plow-credentials
     environment:
       AGENT_ID: plow-hours
