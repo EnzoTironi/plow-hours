@@ -1,28 +1,193 @@
 # Plow Hours
 
-Contractor time tracking through iMessage, with a live timesheet linked to assigned work.
+Track contractor hours in the iMessage conversations you already have.
 
-[Watch Plow Hours](https://youtu.be/hNcJ6omYnWU) · [Agent Index](https://aiworthusing.com/agent-index/plow-hours)
+Each contractor gets a group with you and Plow Hours. They tell the agent when
+they start, take a break, switch tasks or finish. You get a private view of the
+team's hours, the work behind them and the paperwork needed before payday.
 
-Each contractor has a group with you and the agent. They say “starting the landing
-page now”, “taking a break” or “finished for today”. The LLM understands the
-intention and chooses the hours tool. The tool verifies the sender, saves the
-original message time and commits the record before confirming. You get the
-consolidated view in your private conversation and at `/hours`.
+[Set up Plow Hours](https://aiworthusing.com/agent-index/plow-hours) ·
+[Watch it work](https://youtu.be/hNcJ6omYnWU) ·
+[Latest release](https://github.com/EnzoTironi/plow-hours/releases/latest)
 
-No connected Mac is needed for time tracking. The web view needs neither Google
-Sheets nor R2. Sheets and a wiki are optional projections through Latch.
+**Payments stay manual.** The agent collects documents, checks invoice amounts
+against recorded hours and records your approval. It does not move money or mark
+an invoice paid.
 
-## What you can use it for
+## A typical workday
 
-- **Clock in without another app.** Start, pause and finish in the group you already use.
-- **Keep a few contractors organized.** Each person sees their own work; you see everyone.
-- **Remember what the hours were for.** Projects, tickets, commits and notes stay with the time entry.
-- **Get the paperwork before payday.** Collect a nota fiscal and private Pix instructions in Brazil, or an invoice and private ACH instructions in the US. Review them before paying.
+Start in your private conversation with the agent:
 
-## Run locally
+> Add Alex, alex@example.com, to work on the website's landing page and checkout.
+> Create a group with us.
 
-You need Docker, Git, Python 3.11+ and the [Plow CLI](https://github.com/plow-pbc/plow-agents).
+The agent asks for the missing hourly rate and timezone, registers the assigned
+work and creates or verifies the group. Phone numbers and iMessage email
+addresses both work. You can include everything upfront, or answer the questions
+as they come. Country and billing dates can wait until you want to collect invoices.
+
+Alex records work in that group:
+
+| Message | What happens |
+| --- | --- |
+| “Starting the landing page now.” | Opens a session against the assigned landing page work. |
+| “Taking a break.” | Closes that session. Break time does not count. |
+| “Back on the landing page.” | Opens a new session. |
+| “Also fixed checkout validation. Commit abc123.” | Adds a note, keeping the current task and clock open. |
+| “Done with the landing page. Starting checkout now.” | Ends one task and starts the next at the same message time. |
+| “Finished for today.” | Closes the current session and adds its time to recorded hours. |
+| “Plow Hours, how many hours have I logged?” | Reports Alex's own recorded work. |
+
+Nobody needs to learn task IDs or a command syntax. When a start is clear but
+the task is ambiguous, the agent saves the original start time before asking
+which task. The answer does not move the start forward.
+
+The group is still a place for people to talk. “Alex, can you check the landing
+page?” is a message to Alex. The agent stays quiet. It participates when called,
+when someone answers its question, or when the contractor clearly submits their
+own work or requested documents for recording. Plans, questions and quoted
+examples do not start a clock.
+
+Repeat the setup for each contractor. One bot serves the team, with a separate
+three-person group for each worker.
+
+## Who can see and change what
+
+| Access | Owner, in the private conversation | Contractor, in their own group |
+| --- | --- | --- |
+| Hours and assigned work | All contractors | Their own records only |
+| Clocking and work notes | Reviews records; can correct missed work | Starts, pauses, switches and finishes their own work |
+| Rates, tasks and corrections | Sets rates, assigns work and makes corrections with a reason | Cannot change rates or correct recorded intervals |
+| Dashboard | Receives the private hours dashboard link | No owner dashboard access |
+| Billing | Requests paperwork, closes periods and approves after review | Submits their invoice and requested document references |
+
+Contractors use the agent through their registered group. Administration happens
+in the owner's private conversation. Even the owner's messages inside a
+contractor group can only read that contractor's report; they cannot clock on
+the worker's behalf or administer other people from there.
+
+The tools check the live participants before accessing records. A group must
+contain exactly the owner, the registered contractor and the agent, with normal
+group permissions. Adding another participant blocks recording until the group
+is restored. If a finish was rejected, the clock may still be open. The owner
+can correct the actual finish time privately.
+
+## Your team's hours, in one place
+
+Ask “Send me the dashboard” in your private conversation. The agent retrieves
+your installation's address and sends the hours panel at `/hours` first. It also
+mentions the OpenClaw panel at `/openclaw/`. The root address opens the hours panel.
+
+![The owner timesheet, with contractor and project filters, recorded hours, assigned work and billing status](https://github.com/EnzoTironi/plow-hours/releases/download/v5.6.1/closed-billing-timezone.jpg)
+
+The dashboard is read-only and refreshes every 15 seconds. Filter by contractor,
+project and inclusive dates. Running clocks and starts awaiting a task appear
+separately from completed hours. Select a contractor to download their timesheet
+as a TSV with seven columns:
+
+`Day` · `Start` · `Finish` · `Total (Hours)` · `Rate (USD)` · `Project` · `Details`
+
+Projects, work descriptions, reference links, commits and notes stay with the
+entries. Archived tasks leave the assigned work list; their recorded hours and
+project filters remain available.
+
+Dates, seconds and timezone offsets are preserved. A date filter counts only
+the part of a session inside those dates, using the same calendar boundaries as
+billing. Partial sessions retain their original times in Details. A closed
+billing period keeps its saved timezone even if the contractor's profile changes.
+
+## From hours to invoice review
+
+When you are ready to bill, tell the agent who the period is for, the inclusive
+dates and the contractor's country. It sends the paperwork request in that
+person's group.
+
+| Country | Paperwork | Payment instructions |
+| --- | --- | --- |
+| Brazil | Nota fiscal number, amount, currency and private document link | Beneficiary and a private document containing the Pix key |
+| United States | Invoice number, amount, currency and private document link | Beneficiary, bank, account type, last four digits and a private document with full ACH instructions |
+
+Share those documents privately with the owner. Full Pix keys, bank account and
+routing numbers, and tax IDs belong in the documents, not the group. A W-9 is
+requested only when the owner explicitly asks for it.
+
+Closing the period freezes its hours and value. Open clocks, unresolved clock
+events and sessions over 12 hours needing review must be resolved first. Billing
+uses exact elapsed time and the rate saved when each session started, rounding
+to cents once after adding the period's work. Sessions crossing a date boundary
+contribute only the time inside the period.
+
+Rates are set in USD. USD invoices work for both countries. For a Brazilian
+invoice in BRL, the owner supplies the converted amount and a conversion note;
+the agent does not choose an exchange rate.
+
+The agent compares the invoice amount and currency with the closed value.
+Matching metadata and required document references make it ready for your
+review. You check document access, contents, beneficiary and payment destination
+privately, then explicitly approve in your private conversation.
+
+Approval is tied to that version of the hours and document references. Changing
+the invoice, payment instructions or requirements revokes it. If a contractor
+changes approved paperwork, the agent queues a private alert for you and retries
+failed delivery. Changing closed hours requires reopening the period with a reason.
+
+A saved document link does not verify the document or lock its contents. Check
+the instructions again before paying manually, even if the URL stayed the same.
+
+## How the agent works
+
+Plow Hours builds on [Plow OpenClaw](https://github.com/plow-pbc/plow-openclaw-agent).
+Plow provides the iMessage line and message transport. The model interprets the
+conversation and selects a tool; the tools enforce access and save the records.
+
+```text
+iMessage → verified sender and group → model chooses an hours action
+                                           ↓
+                                  audited SQLite ledger
+                                           ↓
+                           private reports and web timesheet
+```
+
+The ledger is the source of truth. Clock actions use the provider's original
+message timestamp and verified sender, not a time or identity chosen by the
+model. Records commit before confirmation. Replayed messages and repeated tool
+calls cannot create a second entry for the same clock event.
+
+Each contractor has one open session. A task switch closes one block and opens
+the next in one transaction. Work notes preserve the current task and start
+time. Rate and timezone changes affect future starts; existing sessions keep
+their captured values.
+
+The durable inbox preserves pending messages across restart and retries after
+a model outage. A delayed start can pair with an earlier-delivered stop;
+conflicting events need owner review. A failed recording is never reported as
+saved. Missing historical work requires exact times, the actual historical rate
+and an owner correction with a reason. Voiding mistakes retains the audit history.
+
+Owner turns use the management tool; contractor groups receive only the tool
+scoped to that person. Generic shell and filesystem tools are disabled. The
+agent reads its fixed [operating instructions](skill/SKILL.md) through the guide
+action instead of editing records directly.
+
+Time tracking and the web view need neither a connected Mac nor Google Sheets.
+Optional Sheets and wiki projections use the owner's Mac through
+[Latch](https://github.com/plow-pbc/latch), with a write and readback before a
+projection is marked current. Sheets API creation is not included; it needs
+backend OAuth permissions outside this repository. Work exports omit stored
+financial document links and redact known banking details, but arbitrary
+sensitive prose cannot all be recognized. Redaction does not erase messages
+already sent. Use private documents from the start.
+
+## Install
+
+For a hosted installation, open [Plow Hours on the Agent Index](https://aiworthusing.com/agent-index/plow-hours)
+and use its setup flow. Once it is running, text your agent's line and start with
+the first contractor. Ask for the dashboard in your private conversation.
+
+### Run locally
+
+For local development, install Docker with Compose 2.24+, Git, Python 3.11+ and
+the [Plow CLI](https://github.com/plow-pbc/plow-agents#1-install-and-log-in).
 
 ```sh
 git clone https://github.com/EnzoTironi/plow-hours.git
@@ -31,164 +196,80 @@ plow-agents login
 plow-agents profile --show
 plow-agents lines
 plow-agents deploy --local --line ln_xxx
-printf '\nAGENT_ID=plow-hours\n' >> plow-credentials
-docker compose up -d
 ```
 
-Choose a free line from `plow-agents lines` and replace `ln_xxx` with its ID. Check
-the account shown by `profile --show` before deploying. Text the line, then open
-[the local timesheet](http://localhost:3331/hours). This loopback address grants
-owner access to local visitors and is for development. Keep it bound to loopback.
-Cloud deployments use Plow’s authenticated owner proxy on port 3000; the image
-accepts only the installation’s owner identity.
-Ask for the dashboard in your private conversation. The agent sends your hours
-panel at `/hours` first and mentions the OpenClaw panel available at `/openclaw/`.
-It gets both addresses from your current installation. The root address also
-opens the hours panel.
+Check that `profile --show` displays the intended account. Replace `ln_xxx` with
+a free line from `lines`. Local deploy writes the line-scoped `plow-credentials`
+and builds and starts this checkout's Compose stack. `AGENT_ID=plow-hours` is
+already set by the image and Compose configuration. Model requests require
+available usage on the configured provider.
 
-The persistent hours volume is bound to its first Plow owner and line. Boot
-refuses a different account or line rather than sharing the old owner’s records.
-Use a new volume for another installation; preserve the original for recovery.
+Text the line, then open [the local timesheet](http://localhost:3331/hours).
+The public image supports native AMD64 and ARM64, including Apple Silicon.
 
-## Onboard and record work
+**Keep the local dashboard on loopback.** Everyone who can reach it receives
+local owner access. Hosted installations use Plow's authenticated owner proxy
+on port 3000. The hours volume is bound to its first account owner and line;
+another installation needs a fresh volume rather than reusing someone else's records.
 
-Send the owner DM a name, international phone number or iMessage email, timezone,
-hourly USD rate and assigned work. The agent creates or verifies a normal group
-containing exactly you, that contractor and the agent. Each contractor gets their
-own group. Their requests cannot change rates, correct hours, approve invoices,
-see other contractors or open your dashboard. Owner messages in a contractor
-group can only read that person’s report; administration belongs in the private DM.
+## Keep the records safe
 
-The agent stays quiet in conversations between people. Call it, reply to its
-question or ask it for help when you need it. Natural clock reports such as
-“starting the landing page now” still work without a mention. A question addressed
-to another person does not trigger a reply or change their hours.
+The SQLite ledger lives at `/var/lib/plow/plow-hours/hours.sqlite` in the
+persistent volume. Keep that volume when restarting or redeploying.
 
-Portuguese and English work naturally. Nobody needs to memorize task IDs or
-commands. Clear starts and stops change the clock. Work updates use an annotation:
-“also fixed the checkout, commit abc123” preserves the running clock’s time and
-task. Mentioning another task alone does not stop it or block billing. An explicit
-switch ends the old task and starts the new one atomically at the same time.
-Breaks close one block; resuming opens another.
+Startup and daily backups use SQLite's live backup API, encrypt snapshots with
+AES-256-GCM and retain the latest seven. The default directory is
+`/var/lib/plow/plow-hours/backups`; the key is
+`/var/lib/plow/plow-hours/backup.key`. Files have private permissions.
 
-When a start needs a task clarification, the first message’s time and rate are
-saved before the question. The answer selects the task without moving the start
-forward. Questions, negations, plans, quotations and historical claims do not
-clock work. Optional `/in <task>`, `/out <notes>` and `/hours` shortcuts skip the
-model. All routes share the same verified identities and replay protection.
-
-An early-delivered stop can pair with its delayed start. Conflicting timestamps
-are preserved for owner review rather than silently inventing an interval. If the
-model fails, the durable inbox survives restart and retries with the original
-sender, time and rate after the provider cooldown. A failure notice never claims
-that hours were recorded.
-
-In the private DM, you can correct times or the task, void an accidental entry,
-record a missed session with its actual historical rate, archive a task or
-deactivate a departed contractor. Changes require a reason and retain the old
-record in the audit history. Sessions over 12 hours require owner review before
-billing. These actions never run a payment.
-
-## Review billing
-
-Tell the agent the contractor’s country and inclusive billing dates. It requests
-the invoice/nota fiscal and a link to private payment instructions shared with
-you. Pix uses the beneficiary and document link. ACH also records the bank,
-account type and last four digits. Full Pix keys, account/routing numbers and tax
-IDs stay in the private document. W-9 is requested only when you explicitly ask
-for it; nationality does not determine a tax requirement.
-
-Close the period after resolving open clocks and pending time issues. The ledger
-splits blocks at period boundaries in the contractor’s timezone, uses each
-block’s captured rate and rounds cents once after adding the exact elapsed time.
-Closed hours cannot change until you reopen the period with a reason. A BRL
-amount requires your explicit converted amount and a conversion note; the agent
-does not invent an exchange rate.
-
-The agent compares the invoice’s amount and currency with that closed value.
-Matching metadata and required document links make it ready for your review.
-Check document access, contents, beneficiary and destination privately, then say
-that you approve in your private conversation. The LLM selects the approval tool;
-the tool binds approval to the unchanged ledger and document references. Any
-change to invoice, payment instructions or requirements revokes the approval.
-When a contractor changes approved documents or payment instructions, a private
-owner alert is saved with the change and sent automatically. Failed delivery
-stays pending for retry after reconnect and on the connection heartbeat.
-Late conflicting clock events also require review before approval.
-
-Document links are receipts, not independent verification. Their contents can
-change without the URL changing: check the instructions again when paying
-manually. Automated transfers will need an immutable provider-verified payee and
-an approval bound to the exact transfer. This version neither sends money nor
-marks an invoice paid. Generic shell and filesystem tools are disabled in the
-agent, including owner turns; operating instructions use the fixed `guide` action.
-
-## Timesheet and recovery
-
-The read-only dashboard refreshes every 15 seconds. Filter by person, project and
-inclusive dates, then download a TSV. It retains the seven columns:
-Day, Start, Finish, Total (Hours), Rate (USD), Project and Details. Dates, seconds
-and offsets are preserved. Closed, non-voided entries count toward totals;
-open clocks and starts awaiting a task are separate. Date filters include only
-time worked inside the selected dates, using each contractor's billing timezone
-and the same calendar boundaries as billing. A closed period retains its saved
-timezone even when the contractor's profile changes. Partial sessions keep their original
-times in Details; the ledger remains unchanged. With no date filter, each session
-uses its captured timezone. Archived tasks leave Assigned work while their time
-entries and project filters remain available.
-
-Rate and timezone changes affect future starts. Work exports omit known banking
-values and financial document references; labelled banking notes are redacted.
-This precaution cannot recognize all sensitive prose, and messages can remain in
-the provider’s history. Use private documents from the beginning.
-
-The ledger lives at `/var/lib/plow/plow-hours/hours.sqlite` in the existing volume.
-Redeploy without deleting that volume. Startup and daily backups use SQLite’s live
-backup API, encrypt with AES-256-GCM and retain seven snapshots. Defaults are
-`plow-hours/backups/` and `plow-hours/backup.key`, with private permissions.
+Create an additional snapshot:
 
 ```sh
 docker compose exec agent /opt/plow/hours-backup create \
   /var/lib/plow/plow-hours/backups /var/lib/plow/plow-hours/backup.key \
   /var/lib/plow/plow-hours/hours.sqlite
-# Restore to a new, empty directory; never overwrite a running ledger.
+```
+
+Restore a chosen snapshot to a new, empty directory for recovery:
+
+```sh
 docker compose exec agent /opt/plow/hours-backup restore \
   /var/lib/plow/restored-hours /var/lib/plow/plow-hours/backup.key \
   /var/lib/plow/plow-hours/backups/HOURS_SNAPSHOT.enc
 ```
 
-Local snapshots do not protect against losing the host or volume. Copy encrypted
-snapshots off-host and keep a separate protected copy of the key; losing the key
-makes recovery impossible. `PLOW_HOURS_BACKUP_DIR` can target another mounted
-location. No cloud backup destination is configured automatically.
+Replace `HOURS_SNAPSHOT.enc` with the actual filename. Restore does not replace
+the live ledger. Copy encrypted snapshots off the host and keep a separate,
+protected copy of the key. Local backups cannot recover a lost host or volume;
+no off-host destination is configured automatically. Set
+`PLOW_HOURS_BACKUP_DIR` to use another mounted backup location.
 
-The [operating skill](skill/SKILL.md) covers optional Sheets/wiki synchronization.
-Neither projection is declared complete before actual write and readback.
-Google Sheets API creation still depends on backend OAuth permissions outside
-this repository.
+## Develop and validate
 
-## Validate and publish
+The [image workflow](.github/workflows/image.yml) builds the pinned base, tests
+the installed plugin and probes the actual gateway on native AMD64 and ARM64.
+Use Node.js 26 for development. To run the installed-image checks locally:
 
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund
 docker build -t plow-hours:test .
 docker run --rm --user root --network none \
-  -v "$PWD/node_modules:/opt/plow/node_modules:ro" -v "$PWD/tests:/opt/plow/tests:ro" \
-  plow-hours:test sh -c '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test --test-timeout=180000 /opt/plow/tests/*.test.ts'
+  -v "$PWD/node_modules:/opt/plow/node_modules:ro" \
+  -v "$PWD/tests:/opt/plow/tests:ro" \
+  plow-hours:test sh -c \
+  '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test --test-timeout=180000 /opt/plow/tests/*.test.ts'
 docker run --rm --network none plow-hours:test /opt/plow/probe
 PLOW_HOURS_TEST_IMAGE=plow-hours:test node tests/dev-boundaries.mjs
 ```
 
-Tests run against the installed image: verified roles, clock replays and recovery,
-atomic switches, concurrent contractors, calendar boundaries, cents, closure and
-approval, legacy migration and authenticated backup restore. The probe starts
-the actual gateway and checks owner-only access for the page, data and assets.
-Network checks run the pinned Caddy proxy and evaluator’s actual loopback listener.
+The [tests](tests/) cover identities and permissions, concurrent contractors,
+clock replay and recovery, task switches, date boundaries, billing cents,
+approval changes and encrypted backup restore. The probe checks authenticated
+access to the timesheet, data and assets. Network checks cover the local proxy
+and evaluator listener.
 
-The [conversation evaluator](evals/conversation.mjs) uses a real model with an
-isolated Plow transport fixture and ledger. It records responses, actual tool
-calls and assertions, without sending production messages or registering a fake
-Agent Index install. It consumes model usage and requires Plow credentials.
+The [conversation evaluator](evals/conversation.mjs) exercises the agent with
+a real model, its actual tools and an isolated Plow transport and ledger:
 
 ```sh
 mkdir -p work/evidence
@@ -197,31 +278,35 @@ docker run --rm --env-file plow-credentials \
   --entrypoint node plow-hours:test /evals/conversation.mjs
 ```
 
-Add `-e EVAL_PHASE=group_attention` to check selective replies, silent completion,
-human conversations interleaved with clock questions and changed group membership.
-`-e EVAL_PHASE=group_failure` uses a controlled provider failure and recovery to
-check that unrelated group messages remain silent through the actual gateway.
-That phase uses a local provider fixture and consumes no external model usage.
+It requires provider credentials and consumes model usage. Add
+`-e EVAL_PHASE=group_attention` to test when the agent should reply or stay quiet.
+`-e EVAL_PHASE=group_failure` tests outage recovery through the actual gateway
+using a controlled local model fixture, without external model usage.
+These evaluations send no production messages. Live Apple iMessage delivery,
+hosted deployment and the chosen off-host backup destination need separate checks.
 
-A full contractor conversation through Apple’s live iMessage service is a
-separate delivery check with the real contractor identity. Fixture success does
-not prove Apple delivery. Cloud deployment and the chosen off-host backup
-destination also need their own checks.
+## Release and publish
 
-The public image includes native AMD64 and ARM64 variants. Docker selects the
-host's architecture, including Apple Silicon; OpenClaw's filesystem maintenance
-needs native system calls and must not run through Rosetta emulation.
+This is a Build on Plow agent. The base image's Agent Index client registers the
+installation and reports actual OpenClaw usage every five minutes.
 
-This image uses Build on Plow. Its base reporter registers the installation and
-reports actual OpenClaw usage every five minutes. A public `v*` tag publishes
-only after the pinned-image checks pass on both architectures, using the official
-Plow image push CLI for each variant and publishing their shared manifest.
-Follow the [Agent Index publishing guide](https://aiworthusing.com/agent-index/publish)
-for first-time 1-click admission and hackathon review. Later admitted updates use
-`plow-agents image push IMAGE --promote plow-hours`. Keep the image public and the
-installation’s Agent Index ID across restarts.
+A `v*` Git tag triggers the release workflow. After both native platforms pass,
+the workflow pushes their images through the official Plow CLI and publishes a
+shared public GHCR manifest. Promote that manifest's immutable digest:
 
-## License
+```sh
+plow-agents image promote plow-hours \
+  ghcr.io/enzotironi/plow-hours@sha256:YOUR_RELEASE_DIGEST
+plow-agents image show plow-hours
+```
 
-Custom code is [MIT licensed](LICENSE). Base dependencies retain their own
-licenses. [NOTICE](NOTICE) covers the original Plow logo and trademark.
+Use the real 64-character digest for the release. Promotion updates the image
+for new installations; running agents keep their current images. Keep the GHCR
+package public. The [Agent Index publishing guide](https://aiworthusing.com/agent-index/publish)
+covers initial admission, listing media and hackathon review.
+
+## License and credits
+
+The custom agent code is [MIT licensed](LICENSE). The Plow base and other
+dependencies retain their own licenses. [NOTICE](NOTICE) covers the original
+Plow logo and trademark.
