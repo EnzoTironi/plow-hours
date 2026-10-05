@@ -130,8 +130,9 @@ inclusive dates, then download a TSV. It retains the seven columns:
 Day, Start, Finish, Total (Hours), Rate (USD), Project and Details. Dates, seconds
 and offsets are preserved. Closed, non-voided entries count toward totals;
 open clocks and starts awaiting a task are separate. Date filters include only
-time worked inside the selected dates, using each contractor's current timezone
-and the same calendar boundaries as billing. Partial sessions keep their original
+time worked inside the selected dates, using each contractor's billing timezone
+and the same calendar boundaries as billing. A closed period retains its saved
+timezone even when the contractor's profile changes. Partial sessions keep their original
 times in Details; the ledger remains unchanged. With no date filter, each session
 uses its captured timezone. Archived tasks leave Assigned work while their time
 entries and project filters remain available.

@@ -10,15 +10,15 @@ const dateRange = z.object({ from: z.iso.date().optional(), to: z.iso.date().opt
 
 type HoursReport = ReturnType<HoursLedger["report"]>[number];
 
-function webEntries(report: HoursReport, range: z.infer<typeof dateRange>) {
-  const from = range.from ? periodBounds(range.from, range.from, report.contractor.timezone).start_ms : -Infinity;
-  const to = range.to ? periodBounds(range.to, range.to, report.contractor.timezone).end_ms : Infinity;
+function webEntries(report: HoursReport, range: z.infer<typeof dateRange>, billingTimezone: string) {
+  const from = range.from ? periodBounds(range.from, range.from, billingTimezone).start_ms : -Infinity;
+  const to = range.to ? periodBounds(range.to, range.to, billingTimezone).end_ms : Infinity;
   return report.entries.filter(entry => !entry.voided && entry.start_ms < to && (entry.end_ms === null || entry.end_ms > from)).map(entry => {
     const demand = report.demands.find(item => item.id === entry.demand_id);
     if (!demand) throw new Error("Time entry has no demand.");
     const start = entry.end_ms === null ? entry.start_ms : Math.max(entry.start_ms, from);
     const finish = entry.end_ms === null ? null : Math.min(entry.end_ms, to);
-    const timezone = range.from || range.to ? report.contractor.timezone : entry.timezone;
+    const timezone = range.from || range.to ? billingTimezone : entry.timezone;
     const clipped = start !== entry.start_ms || finish !== entry.end_ms;
     return {
       id: entry.id, demand_id: entry.demand_id, start_ms: start, end_ms: finish,
@@ -38,14 +38,15 @@ export function hoursWebSnapshot(ledger: HoursLedger, rawRange: z.infer<typeof d
     date_range: range,
     contractors: ledger.report().map(report => {
       const { contractor, demands, entries, pending_clock } = report;
+      const billing = ledger.billingReport(contractor.id);
       return {
         id: contractor.id, name: contractor.name, timezone: contractor.timezone, rate_usd: contractor.rate_cents / 100,
         projects: [...new Set(demands.map(demand => demand.project))],
         demands: demands.filter(demand => demand.active).map(({ id, project, summary, references }) => ({ id, project, summary, references })),
         active: Boolean(contractor.active), review_needed: entries.some(needsReview) || pending_clock.reviews.length > 0,
         pending_clock: { start: pending_clock.start, timezone: pending_clock.timezone, messages: pending_clock.messages, unmatched_stops: pending_clock.unmatched_stops },
-        billing: (() => { const r = ledger.billingReport(contractor.id); return { requested: r.requested, period_start: r.requested ? r.period_start : null, period_end: r.requested ? r.period_end : null, closed: r.closed, approved: r.approved, ready_for_owner_review: r.ready_for_owner_review, unresolved_clocks: Boolean(r.unresolved_clocks), discrepancy_cents: r.discrepancy_cents, expected: r.expected ? { currency: r.expected.currency, amount_cents: r.expected.expected_amount_cents, total_hours: r.expected.total_hours } : null }; })(),
-        entries: webEntries(report, range),
+        billing: { requested: billing.requested, period_start: billing.requested ? billing.period_start : null, period_end: billing.requested ? billing.period_end : null, closed: billing.closed, approved: billing.approved, ready_for_owner_review: billing.ready_for_owner_review, unresolved_clocks: Boolean(billing.unresolved_clocks), discrepancy_cents: billing.discrepancy_cents, expected: billing.expected ? { timezone: billing.expected.timezone, currency: billing.expected.currency, amount_cents: billing.expected.expected_amount_cents, total_hours: billing.expected.total_hours } : null },
+        entries: webEntries(report, range, billing.expected?.timezone ?? contractor.timezone),
       };
     }),
   };

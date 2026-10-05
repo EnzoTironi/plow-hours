@@ -62,6 +62,14 @@ test("date windows and billing agree for a session crossing month-end without ch
   assert.equal(october?.entries[0]?.finish, "2026-11-01 00:00:00 GMT-3");
   assert.equal(hoursWebSnapshot(ledger, { from: "2026-11-02" }).contractors[0]?.entries.length, 0);
   assert.equal(ledger.report("ana")[0]?.total_hours, 2);
+  ledger.manage({ action: "contractor", id: "ana", name: "Ana", handle: "+15550000002", chat_uid: "cht_ana", timezone: "UTC", rate_cents: 5000 }, "profile-after-close");
+  const moved = hoursWebSnapshot(ledger, { from: "2026-11-01", to: "2026-11-01" }).contractors[0];
+  assert.ok(moved?.entries[0]?.end_ms);
+  assert.equal((moved.entries[0].end_ms - moved.entries[0].start_ms) / 3_600_000, 1);
+  assert.equal(moved.entries[0].start, november.entries[0].start);
+  assert.equal(moved.entries[0].rate_usd, 30);
+  assert.equal(moved.timezone, "UTC");
+  assert.equal(moved.billing.expected?.timezone, "America/Sao_Paulo");
 });
 
 test("archived tasks leave assigned work while historical rows and project filters remain", t => {
