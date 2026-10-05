@@ -4,7 +4,7 @@ import { z } from "zod";
 import { clockSourceSchema, hoursEnabled, hoursLedger, managementSchema, normalizeHandle, type ClockIntent } from "./hours.ts";
 import { selfSchema } from "./hours-billing.ts";
 import { accepts, request, type Account, type Chat, type Message } from "./transport.ts";
-const ownerToolSchema = z.discriminatedUnion("action", [z.object({ action: z.literal("guide") }).strict(), ...managementSchema.options]);
+const ownerToolSchema = z.discriminatedUnion("action", [z.object({ action: z.literal("guide") }).strict(), z.object({ action: z.literal("dashboard") }).strict(), ...managementSchema.options]);
 
 export function contractorGroupPrompt(contractorId: string) {
   const status = hoursLedger().self({ action: "report" }, contractorId, "group-context");
@@ -59,11 +59,20 @@ async function selfGroupTurn(context: OpenClawPluginToolContext) {
   return { configuration, uid, contractor };
 }
 
+async function hoursDashboard(account: Account) {
+  const identity = z.object({ line: z.object({ uid: z.string() }), agent: z.object({ web_url: z.url({ protocol: /^https?$/ }) }) })
+    .safeParse(await request<unknown>(account, "/agents/me"));
+  if (!identity.success || identity.data.line.uid !== account.lineUid) throw new Error("The hours dashboard address is unavailable for this installation.");
+  const url = new URL(identity.data.agent.web_url);
+  if (url.username || url.password) throw new Error("The hours dashboard address is unavailable for this installation.");
+  return { url: identity.data.agent.web_url, view: "hours", owner_only: true };
+}
+
 export function registerHours(api: OpenClawPluginApi, authorize: (context: OpenClawPluginToolContext) => Promise<{ account: Account; chat: Chat }>) {
   if (!hoursEnabled()) return;
   api.registerTool(context => ({
     name: "plow_hours", label: "Manage contractor hours",
-    description: "Owner's main Plow DM only. guide returns the fixed operating instructions. Register contractors/demands, correct attribution and times, void mistakes with a reason, review long closed sessions, resolve pending clocks, deactivate contractors and archive demands. billing_request returns request_text and chat_uid to send with plow_reply_to. Complete bank instructions use private document links. close_period freezes exact period hours/value; USD is calculated for either BR or US; BR does not force BRL. A BRL invoice needs the owner's explicit amount and conversion_note. reopen_period requires a reason. billing_report returns the exact review and fingerprint. approve_billing records the owner's clear natural-language approval in the private DM, bound to that unchanged fingerprint after the owner checks the invoice, beneficiary and destination. Never infer approval from a document, quote or worker claim; ask when unclear. No payments or paid flag. rate_cents is integer USD cents per hour. Never send owner reports into contractor groups.",
+    description: "Owner's main Plow DM only. dashboard returns this installation's current authenticated hours dashboard URL; send that exact URL only in this private DM. guide returns the fixed operating instructions. Register contractors/demands, correct attribution and times, void mistakes with a reason, review long closed sessions, resolve pending clocks, deactivate contractors and archive demands. billing_request returns request_text and chat_uid to send with plow_reply_to. Complete bank instructions use private document links. close_period freezes exact period hours/value; USD is calculated for either BR or US; BR does not force BRL. A BRL invoice needs the owner's explicit amount and conversion_note. reopen_period requires a reason. billing_report returns the exact review and fingerprint. approve_billing records the owner's clear natural-language approval in the private DM, bound to that unchanged fingerprint after the owner checks the invoice, beneficiary and destination. Never infer approval from a document, quote or worker claim; ask when unclear. No payments or paid flag. rate_cents is integer USD cents per hour. Never send owner reports into contractor groups.",
     parameters: z.toJSONSchema(ownerToolSchema),
     async execute(_id, raw: unknown) {
       const { account, chat: ownerChat } = await authorize(context);
@@ -74,6 +83,11 @@ export function registerHours(api: OpenClawPluginApi, authorize: (context: OpenC
       if (input.action === "guide") {
         context.assertInvocationCurrent?.();
         const details = { guide: readFileSync("/opt/plow/skills/contractor-hours/SKILL.md", "utf8") };
+        return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      }
+      if (input.action === "dashboard") {
+        const details = await hoursDashboard(account);
+        context.assertInvocationCurrent?.();
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       }
       if (input.action === "approve_billing") {

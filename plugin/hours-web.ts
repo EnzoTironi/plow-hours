@@ -52,7 +52,7 @@ export function createHoursWebHandler(getLedger: () => HoursLedger) {
       return;
     }
     const path = new URL(req.url ?? "/", "http://plow.local").pathname;
-    const asset = assets.get(path === "/hours/" ? "/hours" : path);
+    const asset = assets.get(path === "/" || path === "/hours/" ? "/hours" : path);
     if (asset) {
       res.setHeader("Content-Type", asset.type);
       res.end(req.method === "HEAD" ? undefined : asset.body);
@@ -67,5 +67,7 @@ export function createHoursWebHandler(getLedger: () => HoursLedger) {
 
 export function registerHoursWeb(api: OpenClawPluginApi) {
   if (!hoursEnabled()) return;
-  api.registerHttpRoute({ path: "/hours", match: "prefix", auth: "gateway", handler: createHoursWebHandler(hoursLedger) });
+  const handler = createHoursWebHandler(hoursLedger);
+  api.registerHttpRoute({ path: "/", match: "exact", auth: "gateway", handler });
+  api.registerHttpRoute({ path: "/hours", match: "prefix", auth: "gateway", handler });
 }

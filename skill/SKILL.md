@@ -31,8 +31,8 @@ contractor group can access only that group's scoped tool, `plow_hours_self`.
 4. Register each assigned demand with action="demand", its id, contractor_id,
    project, summary and references. Preserve the owner's GitHub ticket or commit URLs.
    Demand details are immutable. Use a new ID when the scope changes.
-5. Explain the clock messages and share the authenticated agent web address with
-   /hours appended. Use the actual deployed address, never invent one. This web
+5. Explain the clock messages and use action="dashboard" to share the exact
+   authenticated hours-panel address in the owner's private DM. This web
    view is available without a Mac or Google integration. It is for the owner;
    do not send it to contractors or imply they have access.
 6. If the owner wants Sheets or wiki projections, set up only those destinations

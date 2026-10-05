@@ -63,11 +63,12 @@ test("web routes are read-only, scoped to known assets, and set the browser cont
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
-  for (const path of ["/hours", "/hours/", "/hours/app.js", "/hours/style.css", "/hours/plow-logo.svg", "/hours/fonts/dm-sans-latin.woff2", "/hours/fonts/dm-mono-400-latin.woff2", "/hours/fonts/epilogue-latin-500-normal.woff2"]) {
+  for (const path of ["/", "/hours", "/hours/", "/hours/app.js", "/hours/style.css", "/hours/plow-logo.svg", "/hours/fonts/dm-sans-latin.woff2", "/hours/fonts/dm-mono-400-latin.woff2", "/hours/fonts/epilogue-latin-500-normal.woff2"]) {
     const response = await fetch(base + path);
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-security-policy") ?? "", /script-src 'self'/);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    if (path === "/") assert.match(await response.text(), /<title>Plow Hours/);
     if (path.endsWith(".woff2")) {
       assert.equal(response.headers.get("content-type"), "font/woff2");
       assert.match(response.headers.get("content-security-policy") ?? "", /font-src 'self'/);
@@ -97,6 +98,8 @@ test("the optional timesheet uses gateway authentication for the page, data and 
     assert.equal(routes.length, 0);
     process.env.PLOW_HOURS = "1";
     registerHoursWeb(api as Parameters<typeof registerHoursWeb>[0]);
-    assert.deepEqual(routes.map(({ path, auth, match }) => ({ path, auth, match })), [{ path: "/hours", auth: "gateway", match: "prefix" }]);
+    assert.deepEqual(routes.map(({ path, auth, match }) => ({ path, auth, match })), [
+      { path: "/", auth: "gateway", match: "exact" }, { path: "/hours", auth: "gateway", match: "prefix" },
+    ]);
   } finally { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; }
 });
