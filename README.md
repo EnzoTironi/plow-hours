@@ -111,6 +111,9 @@ Check document access, contents, beneficiary and destination privately, then say
 that you approve in your private conversation. The LLM selects the approval tool;
 the tool binds approval to the unchanged ledger and document references. Any
 change to invoice, payment instructions or requirements revokes the approval.
+When a contractor changes approved documents or payment instructions, a private
+owner alert is saved with the change and sent automatically. Failed delivery
+stays pending for retry after reconnect and on the connection heartbeat.
 Late conflicting clock events also require review before approval.
 
 Document links are receipts, not independent verification. Their contents can
@@ -123,11 +126,15 @@ agent, including owner turns; operating instructions use the fixed `guide` actio
 ## Timesheet and recovery
 
 The read-only dashboard refreshes every 15 seconds. Filter by person, project and
-inclusive session-start dates, then download a TSV. It retains the seven columns:
+inclusive dates, then download a TSV. It retains the seven columns:
 Day, Start, Finish, Total (Hours), Rate (USD), Project and Details. Dates, seconds
 and offsets are preserved. Closed, non-voided entries count toward totals;
-open clocks are separate. Billing periods use elapsed-time clipping, while the
-dashboard’s date filter uses each session’s local start date.
+open clocks and starts awaiting a task are separate. Date filters include only
+time worked inside the selected dates, using each contractor's current timezone
+and the same calendar boundaries as billing. Partial sessions keep their original
+times in Details; the ledger remains unchanged. With no date filter, each session
+uses its captured timezone. Archived tasks leave Assigned work while their time
+entries and project filters remain available.
 
 Rate and timezone changes affect future starts. Work exports omit known banking
 values and financial document references; labelled banking notes are redacted.
@@ -191,6 +198,9 @@ docker run --rm --env-file plow-credentials \
 
 Add `-e EVAL_PHASE=group_attention` to check selective replies, silent completion,
 human conversations interleaved with clock questions and changed group membership.
+`-e EVAL_PHASE=group_failure` uses a controlled provider failure and recovery to
+check that unrelated group messages remain silent through the actual gateway.
+That phase uses a local provider fixture and consumes no external model usage.
 
 A full contractor conversation through Apple’s live iMessage service is a
 separate delivery check with the real contractor identity. Fixture success does
