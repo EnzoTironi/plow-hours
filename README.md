@@ -59,6 +59,11 @@ own group. Their requests cannot change rates, correct hours, approve invoices,
 see other contractors or open your dashboard. Owner messages in a contractor
 group can only read that person’s report; administration belongs in the private DM.
 
+The agent stays quiet in conversations between people. Call it, reply to its
+question or ask it for help when you need it. Natural clock reports such as
+“starting the landing page now” still work without a mention. A question addressed
+to another person does not trigger a reply or change their hours.
+
 Portuguese and English work naturally. Nobody needs to memorize task IDs or
 commands. Clear starts and stops change the clock. Work updates use an annotation:
 “also fixed the checkout, commit abc123” preserves the running clock’s time and
@@ -183,6 +188,9 @@ docker run --rm --env-file plow-credentials \
   -v "$PWD/evals:/evals:ro" -v "$PWD/work/evidence:/evidence" \
   --entrypoint node plow-hours:test /evals/conversation.mjs
 ```
+
+Add `-e EVAL_PHASE=group_attention` to check selective replies, silent completion,
+human conversations interleaved with clock questions and changed group membership.
 
 A full contractor conversation through Apple’s live iMessage service is a
 separate delivery check with the real contractor identity. Fixture success does

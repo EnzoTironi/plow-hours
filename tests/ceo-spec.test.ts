@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { HoursLedger } from "../plugin/hours.ts";
-import { renderConfig } from "../boot/config.ts";
+import { renderConfig, syncConfig } from "../boot/config.ts";
 import { probeIdentity } from "../boot/probe-fixture.ts";
 import { identityFromApi } from "../boot/identity.ts";
 
@@ -15,6 +15,20 @@ test("CEO spec: the installed OpenClaw variant exposes Plow Hours, its owner too
   assert.equal(cfg.channels.plow.threadTrust, "untrusted");
   assert.match(readFileSync("/opt/plow/skills/contractor-hours/SKILL.md", "utf8"), /Use `plow_hours` from the owner's main Plow DM/);
   assert.match(readFileSync("/opt/plow/prompt/AGENTS.md", "utf8"), /You are Plow Hours/);
+});
+
+test("boot enables ambient group silence on an existing installation without changing other surfaces", async t => {
+  const directory = mkdtempSync(join(tmpdir(), "plow-hours-config-"));
+  t.after(() => rmSync(directory, { recursive: true }));
+  const configPath = join(directory, "openclaw.json"), includeDirectory = join(directory, "owned");
+  const otherSurface = { silentReply: { group: "disallow" } };
+  writeFileSync(configPath, JSON.stringify({ surfaces: { plow: otherSurface, webchat: otherSurface } }));
+  await syncConfig(renderConfig(probeIdentity, "http://127.0.0.1:1"), configPath, includeDirectory);
+  const saved = JSON.parse(readFileSync(configPath, "utf8"));
+  const policyPath = join(includeDirectory, "plow-silent-reply.json5");
+  assert.deepEqual(saved.surfaces.plow.silentReply, { $include: policyPath });
+  assert.deepEqual(JSON.parse(readFileSync(policyPath, "utf8")), { group: "allow" });
+  assert.deepEqual(saved.surfaces.webchat, otherSurface);
 });
 
 test("boot rejects a different volume owner or line and generic shell/file tools stay unavailable", () => {

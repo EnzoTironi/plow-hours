@@ -35,6 +35,7 @@ const turns = [];
 const checks = [];
 const idempotency = new Map();
 const typing = new Set();
+const typingStarts = new Map();
 let sequence = 0;
 let gatewayLog = '';
 let gateway;
@@ -99,7 +100,10 @@ const server = createServer(async (req, res) => {
       if (!chat) return json({ error: 'No such conversation' }, 404);
       if (!path[2]) return json(chat);
       if (path[2] === 'typing') {
-        const { action } = await bodyOf(req); if (action === 'start') typing.add(chat.uid); else typing.delete(chat.uid); return json({});
+        const { action } = await bodyOf(req);
+        if (action === 'start') { typing.add(chat.uid); typingStarts.set(chat.uid, (typingStarts.get(chat.uid) ?? 0) + 1); }
+        else typing.delete(chat.uid);
+        return json({});
       }
       if (req.method === 'POST') { const body = await bodyOf(req); return json(send(chat, body.body)); }
       let rows = [...messages.get(chat.uid)].reverse();
@@ -143,24 +147,26 @@ async function waitFor(fn, timeout = 180_000) {
   const deadline = Date.now() + timeout;
   while (!fn()) { if (Date.now() > deadline) throw new Error('Timed out waiting for the agent'); await delay(250); }
 }
-async function say(who, chatUid, body, created_at = new Date().toISOString(), uid = `msg_eval_in_${++sequence}`) {
+async function say(who, chatUid, body, created_at = new Date().toISOString(), { uid = `msg_eval_in_${++sequence}`, reply_to } = {}) {
   assert.ok(chats.has(chatUid), 'The real agent must have created the conversation first');
   const sender = chats.get(chatUid).participants.find(p => p.type === 'member' && p.provider_key === who.provider_key && p.role === who.role);
   assert.ok(sender, 'The fixture sender must belong to this conversation');
-  const message = { uid, body, direction: 'inbound', sender, created_at, attachments: [] };
+  const message = { uid, body, direction: 'inbound', sender, created_at, attachments: [], ...(reply_to ? { reply_to } : {}) };
   const existing = messages.get(chatUid).find(m => m.uid === uid);
   if (!existing) messages.get(chatUid).push(message);
-  const from = deliveries.length, beforeModels = modelRequests.length;
+  const from = deliveries.length, beforeModels = modelRequests.length, beforeTools = new Set(toolCalls.keys());
   const started = Date.now();
   activeTurn = { chat_uid: chatUid, sender: who.display_name, message_uid: uid };
   for (const socket of sockets) socket.send(JSON.stringify({ event_type: 'message_received', event_id: uid, chat_id: chatUid, data: { message } }));
-  await waitFor(() => deliveries.slice(from).some(m => m.chat_uid === chatUid));
+  await waitFor(() => deliveries.slice(from).some(m => m.chat_uid === chatUid)
+    || gatewayLog.includes(`acked chat=${chatUid} message=${uid} stage=terminal`));
   // Typing ends after dispatch; clock shortcuts have no typing event.
   await waitFor(() => !typing.has(chatUid));
   await delay(1500);
   await collectUsage();
   const turn = { sender: who.display_name, role: who.role, chat_uid: chatUid, message_uid: uid, created_at, input: body,
-    responses: deliveries.slice(from).map(({ body, chat_uid }) => ({ body, chat_uid })), model_requests: modelRequests.length - beforeModels, duration_ms: Date.now() - started };
+    responses: deliveries.slice(from).map(({ body, chat_uid }) => ({ body, chat_uid })), model_requests: modelRequests.length - beforeModels,
+    tool_calls: [...toolCalls.values()].filter(call => !beforeTools.has(call.id)), duration_ms: Date.now() - started };
   turns.push(turn); console.log('TURN ' + turns.length + ' ' + who.display_name + ': ' + body + '\n' + turn.responses.map(r => r.body).join('\n'));
   await save(); return turn;
 }
@@ -197,7 +203,92 @@ try {
     const report = ledger.report('ana')[0]; assert.equal(report.contractor.rate_cents, 3000); assert.equal(report.contractor.chat_uid, 'cht_eval_ana');
     assert.equal(report.demands[0].id, 'landing'); assert.equal(chats.get('cht_eval_ana').trusted, false);
   });
-  if (process.env.EVAL_PHASE === 'dashboard') {
+  if (process.env.EVAL_PHASE === 'group_attention') {
+    async function quiet(who, input, reply_to) {
+      const before = ledger.report('ana');
+      const turn = await say(who, 'cht_eval_ana', input, undefined, { reply_to });
+      check('Human conversation stays silent without tools or changes: ' + input, () => {
+        assert.ok(turn.model_requests > 0, 'The real model must decide whether to participate');
+        assert.deepEqual(turn.responses, [], 'Silence must produce no iMessage, including no NO_REPLY marker');
+        assert.deepEqual(turn.tool_calls, [], 'Conversation between humans must not invoke tools');
+        assert.equal(typingStarts.get('cht_eval_ana') ?? 0, 0, 'Group conversations must not produce a typing indicator while the agent decides whether to participate');
+        assert.deepEqual(ledger.report('ana'), before);
+        assert.equal(ledger.pendingClockMessages(self.line.uid, 'cht_eval_ana').length, 0, 'Silence must finish the delivery without leaving a replay pending');
+      });
+      return turn;
+    }
+    const humanQuestion = await quiet(owner, 'Oi Ana pode preencher o horario de trabalho?');
+    await quiet(ana, 'Dane, pode conferir minhas horas?');
+    await quiet(ana, 'Dane, can you fill in my time for me?');
+    await quiet(owner, 'Oi Enzo pode preencher o horario de trabalho?');
+    await quiet(owner, 'Ana, amanhã começamos às nove, combinado?');
+    await quiet(ana, 'Boa tarde, pessoal!');
+    const question = messages.get('cht_eval_ana').find(m => m.uid === humanQuestion.message_uid);
+    await quiet(ana, 'Sim, já te mando.', question);
+    const report = await say(ana, 'cht_eval_ana', 'Plow Hours, como estão minhas horas?');
+    check('An explicit request to the agent gets a scoped hours report', () => {
+      assert.ok(report.responses.length > 0); assert.ok(report.tool_calls.some(call => call.name === 'plow_hours_self' && call.args.action === 'report'));
+      assert.equal(ledger.report('ana')[0].entries.length, 0);
+    });
+    const start = await say(ana, 'cht_eval_ana', 'Comecei a trabalhar na landing agora.', '2026-10-05T09:00:00-03:00');
+    check('A natural clock report without a mention still starts the assigned work', () => {
+      assert.ok(start.responses.length > 0); assert.equal(ledger.report('ana')[0].open_entry.start_ms, Date.parse('2026-10-05T09:00:00-03:00'));
+    });
+    await quiet(owner, 'Ana, você terminou a landing?');
+    await quiet(owner, 'Ana, se eu disser "Plow Hours, parei", o que acontece?');
+    await quiet(ana, 'Dane, continuo trabalhando. Você viu o commit abc123?');
+    await quiet(owner, 'Valeu!');
+    await say(ana, 'cht_eval_ana', 'Plow Hours, anota que também corrigi o checkout no commit abc123.', '2026-10-05T09:30:00-03:00');
+    check('A directed work note preserves the running clock and its assigned task', () => {
+      const r = ledger.report('ana')[0]; assert.equal(r.open_entry.start_ms, Date.parse('2026-10-05T09:00:00-03:00'));
+      assert.equal(r.open_entry.demand_id, 'landing'); assert.match(r.open_entry.details, /checkout|abc123/);
+    });
+    await say(ana, 'cht_eval_ana', 'Parei por hoje.', '2026-10-05T10:00:00-03:00');
+    check('A natural finish without a mention closes exactly one hour and retains the note', () => {
+      const r = ledger.report('ana')[0]; assert.equal(r.open_entry, null); assert.equal(r.total_hours, 1); assert.match(r.entries[0].details, /abc123/);
+    });
+    await quiet(ana, 'Obrigado!');
+    await say(owner, home.uid, 'Cadastre outra demanda para Ana: branding, projeto Brand, criar identidade visual.');
+    const pending = await say(ana, 'cht_eval_ana', 'Comecei a trabalhar agora.', '2026-10-05T11:00:00-03:00');
+    check('A clock clarification remains available when the work is ambiguous', () => {
+      assert.ok(pending.responses.length > 0); assert.equal(ledger.self({ action: 'report' }, 'ana', 'eval-pending').pending_start, '2026-10-05T11:00:00-03:00');
+    });
+    const botQuestion = messages.get('cht_eval_ana').filter(m => m.direction === 'outbound').at(-1);
+    const savedStart = ledger.self({ action: 'report' }, 'ana', 'eval-pending').pending_start;
+    const lunch = await quiet(owner, 'Ana, você já almoçou?');
+    await quiet(ana, 'Sim.', messages.get('cht_eval_ana').find(m => m.uid === lunch.message_uid));
+    check('An interleaved human conversation does not cancel or confirm the pending clock', () => {
+      assert.equal(ledger.self({ action: 'report' }, 'ana', 'eval-pending').pending_start, savedStart);
+    });
+    await say(ana, 'cht_eval_ana', 'Branding.', '2026-10-05T11:05:00-03:00', { reply_to: botQuestion });
+    check('A short answer replying to the bot completes its question at the original time', () => {
+      const r = ledger.report('ana')[0]; assert.equal(r.open_entry.demand_id, 'branding'); assert.equal(r.open_entry.start_ms, Date.parse('2026-10-05T11:00:00-03:00'));
+    });
+    await quiet(owner, 'Ana, você pode me mandar o dashboard das horas?');
+    const dashboard = await say(owner, 'cht_eval_ana', 'Plow Hours, me manda o dashboard?');
+    check('An addressed owner request in a group gets private-DM guidance without leaking a dashboard URL', () => {
+      const reply = dashboard.responses.map(r => r.body).join('\n'); assert.ok(reply); assert.match(reply, /privad|DM/i); assert.ok(!/https?:\/\//i.test(reply));
+    });
+    const group = chats.get('cht_eval_ana');
+    chats.set(group.uid, { ...group, participants: [...group.participants, ben] });
+    await quiet(ana, 'Dane, pode revisar minhas horas depois?');
+    const beforeChangedGroup = ledger.report('ana');
+    const changedGroup = await say(ana, group.uid, 'Plow Hours, terminei por hoje.');
+    check('Changed group membership stays quiet for human conversation and denies addressed clock changes', () => {
+      assert.ok(changedGroup.responses.length > 0); assert.deepEqual(changedGroup.tool_calls, []); assert.deepEqual(ledger.report('ana'), beforeChangedGroup);
+    });
+    chats.set(group.uid, group);
+    await say(ana, group.uid, 'Plow Hours, I finished work for today.', '2026-10-05T12:00:00-03:00');
+    check('An English finish works after the authorized roster is restored', () => {
+      const r = ledger.report('ana')[0]; assert.equal(r.open_entry, null); assert.equal(r.total_hours, 2);
+    });
+    const deliveryCount = deliveries.length, modelCount = modelRequests.length;
+    for (const socket of sockets) socket.send(JSON.stringify({ event_type: 'message_received', event_id: humanQuestion.message_uid, chat_id: 'cht_eval_ana', data: { message: question } }));
+    await delay(1800); await collectUsage();
+    check('Replaying a silent human message produces no reply and no additional model run', () => {
+      assert.equal(deliveries.length, deliveryCount); assert.equal(modelRequests.length, modelCount);
+    });
+  } else if (process.env.EVAL_PHASE === 'dashboard') {
     const beforeDashboard = dashboardReads;
     for (const input of ['Me manda o dashboard?', 'Me manda o dashboard das horas?', 'Where is my dashboard?']) {
       const turn = await say(owner, home.uid, input);
