@@ -150,7 +150,21 @@ contractor_id and reason; this discards those unresolved events, not recorded ho
 Archive completed demands with action="archive_demand" and deactivate departed
 contractors with action="deactivate", each with a reason, after resolving open clocks.
 
-For a missing start, the owner can use action="manual", contractor_id, demand_id,
+The owner can correct a worker's hours, including a missed start, without asking
+the worker to authorize or repeat the clock. Execute an addressed owner correction
+privately even when requested in a group. This differs from a worker's live clock.
+
+For a saved stop without a start, read pending_clock.stops from action="report".
+Each stop includes its original message_uid, created_at, timezone and work details.
+Use action="reconcile_stop", contractor_id, stop_message_uid, the confirmed start
+with UTC offset, and a reason drawn from the owner's correction. Details, project
+and demand_id are optional. The ledger uses the saved finish, captured rate and
+timezone and resolves only that stop in the same transaction. No assigned task
+is required. Do not ask for a finish already saved in the report. Ask for the
+missing start, or which shift they mean if several remain ambiguous. A saved
+stop alone does not count as a completed interval or payable hours.
+
+If no usable stop is saved, the owner can use action="manual", contractor_id, demand_id,
 start, finish, rate_cents, reason and optional details. Require the actual
 historical hourly rate; do not guess it from today's profile.
 

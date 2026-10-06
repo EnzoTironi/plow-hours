@@ -171,6 +171,79 @@ test("pending-start finish is recovered after task clarification, and cancelled 
   assert.equal(f.report().pending_clock.messages, 0);
 });
 
+test("an owner recovers a missed start from the saved stop with its original time, rate and timezone", t => {
+  const f = fixture(t);
+  const stop = f.source("missed-start-stop", "12:17", "I finished work.");
+  f.ledger.clockAttempt(stop);
+  assert.match(f.ledger.clock(stop, { kind: "stop", detail: "Animation for Rowan" }) ?? "", /horário original/);
+  f.ledger.completeClockMessage(stop.line_uid, stop.chat_uid, stop.message_uid);
+  assert.equal(f.report().entries.length, 0); assert.equal(f.report().total_hours, 0);
+  assert.deepEqual(f.report().pending_clock.stops, [{ message_uid: stop.message_uid, created_at: stop.created_at,
+    timezone: "UTC", details: "Animation for Rowan" }]);
+  f.restart();
+  f.ledger.manage({ ...f.profile, rate_cents: 7000, timezone: "America/Sao_Paulo" }, "new-profile");
+  const correction = { action: "reconcile_stop", contractor_id: "ana", stop_message_uid: stop.message_uid,
+    start: "2026-10-02T08:00:00Z", reason: "Owner confirmed the missed start at 8 AM" };
+  const receipt = f.ledger.manage(correction, "recover-start");
+  const report = f.report(), entry = report.entries[0];
+  assert.ok(entry); assert.equal(report.entries.length, 1); assert.equal(report.open_entry, null);
+  assert.equal(entry.start_ms, Date.parse(correction.start)); assert.equal(entry.end_ms, Date.parse(stop.created_at));
+  assert.equal(entry.rate_cents, 3000); assert.equal(entry.timezone, "UTC"); assert.equal(entry.details, "Animation for Rowan");
+  assert.equal(entry.stop_message, JSON.stringify([stop.line_uid, stop.chat_uid, stop.message_uid]));
+  assert.equal(report.total_hours, 4.283333); assert.equal(report.pending_clock.unmatched_stops, 0);
+  assert.equal(report.pending_clock.messages, 0); assert.deepEqual(report.pending_clock.stops, []);
+  assert.equal(report.demands.find(d => d.id === entry.demand_id)?.reported, 1);
+  assert.ok(report.audit.some(a => a.action === "reconcile_stop"));
+  assert.deepEqual(f.ledger.manage(correction, "recover-start"), receipt);
+  assert.throws(() => f.ledger.manage(correction, "new-tool-call"), /unavailable/);
+  assert.match(f.ledger.clock({ ...stop, created_at: "2026-10-02T18:00:00Z" }, { kind: "stop", detail: "retry" }) ?? "", /4.283333 h/);
+  assert.equal(f.report().entries.length, 1);
+  f.ledger.manage({ action: "billing_request", contractor_id: "ana", country: "US", period_start: "2026-10-02", period_end: "2026-10-02" }, "billing");
+  f.ledger.manage({ action: "close_period", contractor_id: "ana" }, "close");
+  assert.equal(f.ledger.billingReport("ana").expected.expected_amount_cents, 12850);
+  assert.equal(f.ledger.billingReport("ana").approved, false); assert.equal(f.ledger.billingReport("ana").paid, false);
+});
+
+test("a missing-start correction rejects another stop, reversed time and overlap without losing the saved evidence", t => {
+  const f = fixture(t);
+  f.ledger.clock(f.source("recorded-start", "08:00"), { kind: "start", detail: "landing" });
+  f.ledger.clock(f.source("recorded-stop", "09:00"), { kind: "stop", detail: "" });
+  const stop = f.source("unmatched", "12:17");
+  f.ledger.clockAttempt(stop); f.ledger.clock(stop, { kind: "stop", detail: "" });
+  const before = f.report();
+  const correction = { action: "reconcile_stop", contractor_id: "ana", stop_message_uid: stop.message_uid,
+    start: "2026-10-02T09:00:00Z", reason: "Owner confirmed missing start" };
+  assert.throws(() => f.ledger.manage({ ...correction, stop_message_uid: "another-worker-stop" }, "wrong-stop"), /unavailable/);
+  assert.throws(() => f.ledger.manage({ ...correction, start: "2026-10-02T13:00:00Z" }, "backwards"), /before/);
+  assert.throws(() => f.ledger.manage({ ...correction, start: "2026-10-02T08:00:00Z" }, "overlap"), /overlaps/);
+  assert.deepEqual(f.report(), before);
+});
+
+test("reconciling one stop leaves other shifts pending and a closed billing period requires reopening", t => {
+  const f = fixture(t);
+  const shifts: [string, string][] = [["first-stop", "09:00"], ["second-stop", "10:00"]];
+  for (const [uid, hour] of shifts) {
+    const stop = f.source(uid, hour);
+    f.ledger.clockAttempt(stop); f.ledger.clock(stop, { kind: "stop", detail: "" });
+    f.ledger.completeClockMessage(stop.line_uid, stop.chat_uid, stop.message_uid);
+  }
+  f.ledger.manage({ action: "reconcile_stop", contractor_id: "ana", stop_message_uid: "first-stop",
+    start: "2026-10-02T08:00:00Z", reason: "Owner confirmed first shift" }, "recover-first");
+  assert.equal(f.report().entries.length, 1);
+  assert.deepEqual(f.report().pending_clock.stops.map(s => s.message_uid), ["second-stop"]);
+  f.ledger.manage({ action: "reconcile_stop", contractor_id: "ana", stop_message_uid: "second-stop",
+    start: "2026-10-02T09:15:00Z", reason: "Owner confirmed second shift" }, "recover-second");
+  assert.equal(f.report().total_hours, 1.75); assert.equal(f.report().pending_clock.unmatched_stops, 0);
+  f.ledger.manage({ action: "billing_request", contractor_id: "ana", country: "US", period_start: "2026-10-02", period_end: "2026-10-02" }, "billing");
+  f.ledger.manage({ action: "close_period", contractor_id: "ana" }, "close");
+  const stop = f.source("late-stop", "11:00");
+  f.ledger.clockAttempt(stop); f.ledger.clock(stop, { kind: "stop", detail: "" });
+  const before = f.report();
+  assert.throws(() => f.ledger.manage({ action: "reconcile_stop", contractor_id: "ana", stop_message_uid: stop.message_uid,
+    start: "2026-10-02T10:15:00Z", reason: "Owner confirmed third shift" }, "locked"), /closed|reopen|fechado/i);
+  assert.deepEqual(f.report(), before);
+});
+
 test("long sessions require owner review; archiving and deactivation preserve history and remove clock access", t => {
   const f = fixture(t);
   f.ledger.clock(f.source("long-start", "00:00"), { kind: "start", detail: "landing" });

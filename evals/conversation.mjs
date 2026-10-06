@@ -20,7 +20,7 @@ const token = process.env.PLOW_AGENT_TOKEN;
 if (!token) throw new Error('Pass the private plow-credentials with --env-file.');
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
-const alderAttention = process.env.EVAL_PHASE === 'alder_attention';
+const alderAttention = ['alder_attention', 'alder_reconciliation'].includes(process.env.EVAL_PHASE);
 const agentName = alderAttention ? 'Alder' : 'Plow Hours';
 if (alderAttention) process.env.AGENT_NAME = agentName;
 const owner = { type: 'member', uid: 'mem_eval_owner', role: 'owner', display_name: alderAttention ? 'Enzo' : 'Dane', provider_key: '+15550000001' };
@@ -288,6 +288,47 @@ try {
       unconfirmed(followup); noFallback(followup);
     });
     check('The delivery conversation uses successful real model calls', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
+    });
+  } else if (process.env.EVAL_PHASE === 'alder_reconciliation') {
+    await say(owner, home.uid, `Cadastre Pueblo, ${alex.provider_key}, USD 20 por hora, America/Sao_Paulo. Crie um grupo comigo e ele. Não há tarefa cadastrada.`);
+    const groupUid = 'cht_eval_alex';
+    const report = () => ledger.report().find(r => r.contractor.handle === alex.provider_key);
+    const finish = '2026-10-05T12:17:00-03:00';
+    const stop = await say(alex, groupUid, 'Quero registrar minah saido da trabalho', finish);
+    check('A missing start saves the original finish as a pending stop, without recording completed hours', () => {
+      assert.equal(report().entries.length, 0); assert.equal(report().total_hours, 0);
+      assert.equal(report().pending_clock.unmatched_stops, 1);
+      assert.deepEqual(report().pending_clock.stops.map(s => ({ message_uid: s.message_uid, created_at: s.created_at, timezone: s.timezone })),
+        [{ message_uid: stop.message_uid, created_at: finish, timezone: 'America/Sao_Paulo' }]);
+      assert.ok(stop.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'stop'));
+    });
+    const correction = await say(owner, groupUid, 'Consegue registrar que o pueblo entrou as 8 da manhã', '2026-10-05T12:18:00-03:00');
+    check('The owner confirms only the missing start and Alder uses the saved finish privately without worker reauthorization', () => {
+      assert.ok(correction.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'reconcile_stop' && c.args.stop_message_uid === stop.message_uid));
+      assert.ok(correction.responses.length); assert.ok(correction.responses.every(r => r.chat_uid === home.uid));
+      assert.ok(!correction.tool_calls.some(c => ['plow_reply_to', 'plow_hours_self'].includes(c.name)));
+      assert.equal(report().entries.length, 1);
+      const entry = report().entries[0];
+      assert.equal(entry.start_ms, Date.parse('2026-10-05T08:00:00-03:00')); assert.equal(entry.end_ms, Date.parse(finish));
+      assert.equal(entry.rate_cents, 2000); assert.equal(entry.timezone, 'America/Sao_Paulo');
+      assert.equal(report().total_hours, 4.283333); assert.equal(report().open_entry, null);
+      assert.equal(report().pending_clock.unmatched_stops, 0);
+      assert.ok(!/que horas.*(?:parou|encerrou)|hor[aá]rio exato.*(?:parou|sa[ií]da)|Pueblo precisa.*(?:mandar|confirmar)/i.test(correction.responses.map(r => r.body).join('\n')));
+    });
+    const confirmation = await say(owner, groupUid, 'Alder, confirma o horário da saída que o Pueblo mandou?');
+    check('The recorded stop remains visible to the owner after reconciliation without another timestamp question', () => {
+      assert.ok(confirmation.responses.length); assert.ok(confirmation.responses.every(r => r.chat_uid === home.uid));
+      assert.match(confirmation.responses.map(r => r.body).join('\n'), /12[:h]17/);
+      assert.equal(report().entries.length, 1);
+    });
+    const worker = await say(alex, groupUid, 'Alder, como ficaram minhas horas?');
+    check('The contractor sees their corrected hours in their own group', () => {
+      assert.ok(worker.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'report'));
+      assert.ok(worker.responses.length); assert.ok(worker.responses.every(r => r.chat_uid === groupUid));
+      assert.equal(report().total_hours, 4.283333);
+    });
+    check('The reconciliation conversation uses successful real model calls', () => {
       assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
     });
   } else if (alderAttention) {
