@@ -74,7 +74,12 @@ entry=replaceOnce(entry,turnLog,`  if (hoursEnabled() && account.accountId === "
     } };
   }
 ${turnLog}`);
-entry=replaceOnce(entry,'conversation: { kind, id: chat.uid,','conversation: { kind: ownerGroup ? "group" : kind, id: chat.uid,');
+entry=replaceOnce(entry,'  const participants = chat.participants.map(', '  const participants = (ownerGroup ?? chat).participants.map(');
+entry=replaceOnce(entry,'from: kind === "group" ?', 'from: ownerGroup ? `plow:group:${ownerGroup.uid}` : kind === "group" ?');
+entry=replaceOnce(entry,'conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name,',
+  'conversation: { kind: ownerGroup ? "group" : kind, id: ownerGroup?.uid ?? chat.uid, nativeChannelId: chat.uid, label: (ownerGroup ?? chat).display_name,');
+entry=replaceOnce(entry,'payload: { first_contact: firstContact, trusted: chat.trusted, participants,',
+  'payload: { first_contact: firstContact, trusted: (ownerGroup ?? chat).trusted, participants,');
 entry=replaceOnce(entry,'  const body = message.body ||', '  const body = (hoursRestricted ? workText(message.body) : message.body) ||');
 entry=replaceOnce(entry,'      body: m.body, timestamp:', '      body: hoursRestricted ? workText(m.body) : m.body, timestamp:');
 entry=replaceOnce(entry,'body: message.reply_to.body, sender:', 'body: hoursRestricted ? workText(message.reply_to.body) : message.reply_to.body, sender:');

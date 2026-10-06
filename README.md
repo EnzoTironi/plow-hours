@@ -298,6 +298,8 @@ It requires provider credentials and consumes model usage. Add
 missing groups and contact correction through a real model and isolated transport.
 `-e EVAL_PHASE=work_overview` tests immediate starts, free-form descriptions,
 activity updates and billing without predefined tasks or task approval.
+`-e EVAL_PHASE=alder_attention` tests a configured Alder persona with owner and
+contractor conversations, quiet human requests, private owner replies and natural clocks.
 `-e EVAL_PHASE=group_failure` tests outage recovery through the actual gateway
 using a controlled local model fixture, without external model usage.
 These evaluations send no production messages. Live Apple iMessage delivery,
