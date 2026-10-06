@@ -26,6 +26,8 @@ const contractorSchema = z.object({
 });
 const demandSchema = z.object({ id, contractor_id: id, project: text, summary: text, references: z.string(), active: z.number(), reported: z.number().int().min(0).max(1) });
 const receiptSchema = z.object({ response: z.string() });
+const ownerNoticeSchema = z.object({ source: text, name: text,
+  kind: z.enum(["approval_revoked", "clock_review"]), body: z.string() });
 type Contractor = z.infer<typeof contractorSchema>;
 type Entry = z.infer<typeof entrySchema>;
 
@@ -143,8 +145,20 @@ export class HoursLedger {
       }
       if (!this.db.prepare("PRAGMA table_info(clock_inbox)").all().some(row => row.name === "review_reason"))
         this.db.exec("ALTER TABLE clock_inbox ADD COLUMN review_reason TEXT NOT NULL DEFAULT ''");
+      if (!this.db.prepare("PRAGMA table_info(owner_notices)").all().some(row => row.name === "kind"))
+        this.db.exec("ALTER TABLE owner_notices ADD COLUMN kind TEXT NOT NULL DEFAULT 'approval_revoked' CHECK(kind IN ('approval_revoked','clock_review'))");
+      if (!this.db.prepare("PRAGMA table_info(owner_notices)").all().some(row => row.name === "body"))
+        this.db.exec("ALTER TABLE owner_notices ADD COLUMN body TEXT NOT NULL DEFAULT ''");
       this.db.exec("DROP INDEX IF EXISTS one_open_entry; CREATE UNIQUE INDEX one_open_entry ON entries(contractor_id) WHERE end_ms IS NULL AND voided=0;");
       this.db.exec("UPDATE clock_inbox SET source_json=json_set(source_json, '$.body', '') WHERE complete=1;");
+      for (const row of this.db.prepare("SELECT DISTINCT contractor_id FROM unmatched_stops").all()) {
+        const contractor = this.contractor(z.object({ contractor_id: id }).parse(row).contractor_id);
+        for (const stop of this.unmatchedStops(contractor.id)) this.queueStopNotice(contractor, stop.message);
+      }
+      for (const row of this.db.prepare("SELECT source_json, contractor_id, review_reason FROM clock_inbox WHERE review_reason != ''").all()) {
+        const review = z.object({ source_json: z.string(), contractor_id: id, review_reason: text }).parse(row);
+        this.queueClockReviewNotice(this.contractor(review.contractor_id), clockSourceSchema.parse(JSON.parse(review.source_json)), review.review_reason);
+      }
     });
     this.billing = new HoursBilling(this.db);
   }
@@ -199,7 +213,7 @@ export class HoursLedger {
       if (old) return JSON.parse(receiptSchema.parse(old).response);
       const approved = this.billing.hasStoredApproval(contractorId);
       const result = this.billing.submit(contractorId, input);
-      if (approved && !this.billing.hasStoredApproval(contractorId)) this.db.prepare("INSERT INTO owner_notices(source, contractor_id) VALUES (?, ?) ON CONFLICT DO NOTHING").run(key, contractorId);
+      if (approved && !this.billing.hasStoredApproval(contractorId)) this.queueOwnerNotice(key, contractorId, "approval_revoked");
       this.audit(source, input.action, undefined, { contractor_id: contractorId, action: input.action, received: true });
       this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?)").run(key, JSON.stringify(result));
       return result;
@@ -352,6 +366,7 @@ export class HoursLedger {
       const stop = this.finishClock(entrySchema.parse(this.db.prepare("SELECT * FROM entries WHERE id=?").get(entryId)), finish, waiting.details, waiting.source);
       this.db.prepare("UPDATE receipts SET response=? WHERE source=?").run(stop, waiting.source);
       this.db.prepare("DELETE FROM unmatched_stops WHERE source=?").run(waiting.source);
+      this.completeOwnerNotice(waiting.source);
       response += ` O encerramento que chegou antes também foi recuperado: ${stop}`;
     }
     if (command.kind === "confirm_start") this.db.prepare("UPDATE receipts SET response = ? WHERE source = ?").run(response, source);
@@ -365,6 +380,7 @@ export class HoursLedger {
     this.billing.invalidateApproval(contractor.id);
     this.bump(contractor.id);
     this.audit(source, "clock_review", undefined, { contractor_id: contractor.id, created_at: input.created_at, reason });
+    this.queueClockReviewNotice(contractor, input, reason);
     return `${reason} Guardei a mensagem com seu horário original para o dono revisar. O registro de horas foi preservado; a cobrança aguarda essa revisão.`;
   }
 
@@ -386,8 +402,29 @@ export class HoursLedger {
   }
 
   pendingOwnerNotices() {
-    return this.db.prepare("SELECT source, name FROM owner_notices JOIN contractors ON contractors.id=owner_notices.contractor_id WHERE delivered=0 ORDER BY owner_notices.rowid")
-      .all().map(row => z.object({ source: text, name: text }).parse(row));
+    return this.db.prepare("SELECT source, name, kind, body FROM owner_notices JOIN contractors ON contractors.id=owner_notices.contractor_id WHERE delivered=0 ORDER BY owner_notices.rowid")
+      .all().map(row => ownerNoticeSchema.parse(row));
+  }
+
+  private queueOwnerNotice(source: string, contractorId: string, kind: z.infer<typeof ownerNoticeSchema>["kind"], body = "") {
+    this.db.prepare("INSERT INTO owner_notices(source, contractor_id, kind, body) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING")
+      .run(source, contractorId, kind, body);
+  }
+
+  private queueClockReviewNotice(contractor: Contractor, input: ClockSource, reason: string) {
+    const timezone = this.recordedClockSource(input)?.timezone ?? contractor.timezone;
+    this.queueOwnerNotice(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, "clock_review",
+      `${contractor.name} tem um registro de horas pendente de revisão em ${localTime(Date.parse(input.created_at), timezone)}. ${reason} Confirme os horários corretos aqui no privado para eu ajustar o registro.`);
+  }
+
+  private queueStopNotice(contractor: Contractor, input: ClockSource) {
+    const pending = this.pendingStart(contractor.id), finish = Date.parse(input.created_at);
+    const timezone = this.recordedClockSource(input)?.timezone ?? contractor.timezone;
+    const question = pending && Date.parse(pending.source.created_at) < finish
+      ? `Há também um início pendente em ${localTime(Date.parse(pending.source.created_at), pending.timezone)}. Confirma que esses registros formam o mesmo período de trabalho?`
+      : "Qual foi o horário de entrada? Confirme aqui no privado para eu consolidar esse período.";
+    this.queueOwnerNotice(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, "clock_review",
+      `${contractor.name} registrou uma saída em ${localTime(finish, timezone)}, mas não há um ponto de entrada aberto. ${question} As horas desse período ainda não foram contabilizadas.`);
   }
 
   completeOwnerNotice(source: string) {
@@ -447,6 +484,7 @@ export class HoursLedger {
         this.db.prepare("INSERT INTO unmatched_stops(source, contractor_id, source_json, details) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING")
           .run(source, contractor.id, JSON.stringify({ ...input, body: "" }), workText(command.detail, this.billing.secrets(contractor.id)));
         this.billing.invalidateApproval(contractor.id);
+        this.queueStopNotice(contractor, input);
         response = "Você não tem ponto aberto. Guardei este encerramento com seu horário original para recuperar um início atrasado. O dono pode revisar se faltou o início.";
       }
       else if (ms <= active.start_ms || this.overlaps(contractor.id, active.start_ms, ms, active.id)) {
@@ -508,6 +546,7 @@ export class HoursLedger {
           this.db.prepare("DELETE FROM pending_starts WHERE contractor_id=?").run(input.contractor_id);
           this.db.prepare("DELETE FROM unmatched_stops WHERE contractor_id=?").run(input.contractor_id);
           this.db.prepare("UPDATE clock_inbox SET complete=1, review_reason='', source_json=json_set(source_json, '$.body', '') WHERE contractor_id=?").run(input.contractor_id);
+          this.db.prepare("UPDATE owner_notices SET delivered=1 WHERE contractor_id=? AND kind='clock_review'").run(input.contractor_id);
           this.audit(source, input.action, before, input);
           return { resolved: true, contractor_id: input.contractor_id, reason: input.reason };
         }
@@ -515,10 +554,14 @@ export class HoursLedger {
           const contractor = this.contractor(input.contractor_id);
           const stop = this.unmatchedStops(contractor.id).find(s => s.message.message_uid === input.stop_message_uid);
           if (!stop) throw new Error("That unmatched stop is unavailable for this contractor. Read the report before changing an existing entry.");
-          if (stop.rate_cents === null || stop.timezone === null) throw new Error("The stop timestamp is saved, but its historical rate or timezone is unavailable. The owner must confirm them for a manual correction.");
-          if (this.pendingStart(contractor.id)) throw new Error("Review the existing pending start before reconciling this missing start.");
           const start = Date.parse(input.start), finish = Date.parse(stop.message.created_at);
           if (finish <= start) throw new Error("The confirmed start must be before the saved stop.");
+          const pending = this.pendingStart(contractor.id);
+          const paired = pending && pending.source.line_uid === stop.message.line_uid && pending.source.chat_uid === stop.message.chat_uid
+            && normalizeHandle(pending.source.handle) === normalizeHandle(stop.message.handle) && Date.parse(pending.source.created_at) < finish ? pending : undefined;
+          const rate = paired?.rate_cents ?? stop.rate_cents, timezone = paired?.timezone ?? stop.timezone;
+          if (rate === null || timezone === null) throw new Error("The stop timestamp is saved, but its historical rate or timezone is unavailable. The owner must confirm them for a manual correction.");
+          const pendingSource = paired ? JSON.stringify([paired.source.line_uid, paired.source.chat_uid, paired.source.message_uid]) : undefined;
           const entryId = `hours_${createHash("sha256").update(stop.source).digest("hex").slice(0,24)}`;
           this.billing.assertUnlocked(contractor.id, start, finish);
           if (this.overlaps(contractor.id, start, finish, entryId)) throw new Error("The correction overlaps another time entry.");
@@ -533,14 +576,20 @@ export class HoursLedger {
           if (!assigned) this.db.prepare('INSERT INTO demands(id, contractor_id, project, summary, "references", reported) VALUES (?, ?, ?, ?, ?, 1)')
             .run(demand.id, contractor.id, demand.project, demand.summary, "");
           this.db.prepare("INSERT INTO entries(id, contractor_id, demand_id, start_ms, end_ms, rate_cents, timezone, details, start_message, stop_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .run(entryId, contractor.id, demand.id, start, finish, stop.rate_cents, stop.timezone, details, receiptKey, stop.source);
+            .run(entryId, contractor.id, demand.id, start, finish, rate, timezone, details, pendingSource ?? receiptKey, stop.source);
           this.db.prepare("DELETE FROM unmatched_stops WHERE source=?").run(stop.source);
+          this.completeOwnerNotice(stop.source);
+          if (paired && pendingSource) {
+            this.db.prepare("DELETE FROM pending_starts WHERE contractor_id=?").run(contractor.id);
+            this.db.prepare("UPDATE clock_inbox SET complete=1, review_reason='', source_json=json_set(source_json, '$.body', '') WHERE source=?").run(pendingSource);
+          }
           this.db.prepare("UPDATE clock_inbox SET complete=1, review_reason='', source_json=json_set(source_json, '$.body', '') WHERE source=?").run(stop.source);
-          this.db.prepare("UPDATE receipts SET response=? WHERE source=?")
-            .run(`O dono confirmou o início às ${localTime(start, stop.timezone)}. Ponto encerrado às ${localTime(finish, stop.timezone)}; ${hours(finish - start)} h registradas.`, stop.source);
+          const confirmation = `O dono confirmou o início às ${localTime(start, timezone)}. Ponto encerrado às ${localTime(finish, timezone)}; ${hours(finish - start)} h registradas.`;
+          this.db.prepare("UPDATE receipts SET response=? WHERE source=?").run(confirmation, stop.source);
+          if (pendingSource) this.db.prepare("UPDATE receipts SET response=? WHERE source=?").run(confirmation, pendingSource);
           this.bump(contractor.id);
-          this.audit(source, input.action, stop, { ...input, entry_id: entryId, start_ms: start, end_ms: finish, rate_cents: stop.rate_cents, timezone: stop.timezone });
-          return { recorded: true, entry_id: entryId, start_ms: start, end_ms: finish, hours: hours(finish - start), rate_cents: stop.rate_cents, timezone: stop.timezone, stop_message_uid: stop.message.message_uid };
+          this.audit(source, input.action, { stop, pending_start: paired }, { ...input, entry_id: entryId, start_ms: start, end_ms: finish, rate_cents: rate, timezone });
+          return { recorded: true, entry_id: entryId, start_ms: start, end_ms: finish, hours: hours(finish - start), rate_cents: rate, timezone, stop_message_uid: stop.message.message_uid };
         }
         case "deactivate": {
           const before = this.contractor(input.contractor_id);

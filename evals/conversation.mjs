@@ -21,7 +21,7 @@ if (!token) throw new Error('Pass the private plow-credentials with --env-file.'
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
 const groupDelivery = process.env.EVAL_PHASE === 'alder_group_delivery';
-const alderAttention = ['alder_attention', 'alder_reconciliation', 'alder_group_delivery'].includes(process.env.EVAL_PHASE);
+const alderAttention = ['alder_attention', 'alder_reconciliation', 'alder_group_delivery', 'alder_legacy_reconciliation'].includes(process.env.EVAL_PHASE);
 const agentName = alderAttention ? 'Alder' : 'Plow Hours';
 if (alderAttention) process.env.AGENT_NAME = agentName;
 const owner = { type: 'member', uid: 'mem_eval_owner', role: 'owner', display_name: alderAttention ? 'Enzo' : 'Dane', provider_key: '+15550000001' };
@@ -368,6 +368,43 @@ try {
     check('Group delivery uses successful real model calls without production messages', () => {
       assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
     });
+  } else if (process.env.EVAL_PHASE === 'alder_legacy_reconciliation') {
+    await say(owner, home.uid, `Cadastre Pueblo, ${alex.provider_key}, USD 20 por hora, America/Los_Angeles. Crie um grupo comigo e ele. Não há tarefa cadastrada.`);
+    const groupUid = 'cht_eval_alex';
+    const report = () => ledger.report().find(r => r.contractor.handle === alex.provider_key);
+    // Reproduce a pre-upgrade pending start rather than sending a new start to the corrected agent.
+    const start = { line_uid: self.line.uid, chat_uid: groupUid, handle: alex.provider_key, message_uid: 'msg_legacy_start',
+      body: 'Comecei a trabalhar na animação para o Rowan.', created_at: '2026-10-05T19:03:00-07:00' };
+    ledger.clockAttempt(start); ledger.clock(start, { kind: 'clarify_start' });
+    const stopped = await say(alex, groupUid, 'Parei por hoje.', '2026-10-05T19:18:00-07:00');
+    check('A legacy start and unmatched stop proactively ask the owner privately to reconcile the saved interval', () => {
+      assert.equal(report().entries.length, 0); assert.equal(report().pending_clock.start, start.created_at);
+      assert.equal(report().pending_clock.unmatched_stops, 1);
+      const requests = stopped.responses.filter(r => r.chat_uid === home.uid);
+      assert.equal(requests.length, 1); assert.match(requests[0].body, /19:03/); assert.match(requests[0].body, /19:18/);
+      assert.match(requests[0].body, /Confirma/); assert.ok(requests[0].body.includes('Pueblo'));
+      assert.deepEqual(ledger.pendingOwnerNotices(), []);
+    });
+    const confirmation = await say(owner, home.uid, 'Sim, pode consolidar esse período do Pueblo. A entrada e a saída estão corretas.');
+    check('The owner confirms naturally and the actual tool consolidates the saved 15 minutes without asking for either timestamp again', () => {
+      assert.ok(confirmation.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'reconcile_stop' && c.args.stop_message_uid === stopped.message_uid));
+      assert.ok(confirmation.responses.length); assert.ok(confirmation.responses.every(r => r.chat_uid === home.uid));
+      assert.equal(report().entries.length, 1); assert.equal(report().total_hours, 0.25);
+      const entry = report().entries[0];
+      assert.equal(entry.start_ms, Date.parse(start.created_at)); assert.equal(entry.end_ms, Date.parse('2026-10-05T19:18:00-07:00'));
+      assert.equal(entry.rate_cents, 2000); assert.equal(entry.timezone, 'America/Los_Angeles');
+      assert.equal(report().pending_clock.start, null); assert.equal(report().pending_clock.unmatched_stops, 0);
+      assert.ok(!confirmation.tool_calls.some(c => ['plow_reply_to', 'plow_hours_self'].includes(c.name)));
+    });
+    const worker = await say(alex, groupUid, 'Alder, como ficaram minhas horas?');
+    check('The contractor sees their consolidated 15 minutes in their own group', () => {
+      assert.ok(worker.responses.length); assert.ok(worker.responses.every(r => r.chat_uid === groupUid));
+      assert.match(worker.responses.map(r => r.body).join('\n'), /15\s*(?:min|minutos)|0[.,]25\s*h/i);
+      assert.equal(report().entries.length, 1);
+    });
+    check('Legacy reconciliation uses successful real model calls', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
+    });
   } else if (process.env.EVAL_PHASE === 'alder_reconciliation') {
     await say(owner, home.uid, `Cadastre Pueblo, ${alex.provider_key}, USD 20 por hora, America/Sao_Paulo. Crie um grupo comigo e ele. Não há tarefa cadastrada.`);
     const groupUid = 'cht_eval_alex';
@@ -380,6 +417,7 @@ try {
       assert.deepEqual(report().pending_clock.stops.map(s => ({ message_uid: s.message_uid, created_at: s.created_at, timezone: s.timezone })),
         [{ message_uid: stop.message_uid, created_at: finish, timezone: 'America/Sao_Paulo' }]);
       assert.ok(stop.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'stop'));
+      assert.equal(stop.responses.filter(r => r.chat_uid === home.uid).length, 1);
     });
     const correction = await say(owner, groupUid, 'Consegue registrar que o pueblo entrou as 8 da manhã', '2026-10-05T12:18:00-03:00');
     check('The owner confirms only the missing start and Alder uses the saved finish privately without worker reauthorization', () => {

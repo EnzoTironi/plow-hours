@@ -21,7 +21,8 @@ export async function flushHoursNotices(account: Account) {
     if (!accepts(account, chat) || findOwnerChat(account, [chat]) !== chat || owner?.type !== "member") throw new Error("Owner notification requires the current private owner conversation.");
     for (const notice of ledger.pendingOwnerNotices()) {
       const receipt = await request<unknown>(account, `/chats/${encodeURIComponent(chat.uid)}/messages`, {
-        body: `${notice.name} atualizou documentos ou instruções de pagamento depois da sua aprovação. A aprovação foi revogada. Confira os dados atuais na conversa privada antes de aprovar novamente ou pagar.`,
+        body: notice.kind === "clock_review" ? notice.body
+          : `${notice.name} atualizou documentos ou instruções de pagamento depois da sua aprovação. A aprovação foi revogada. Confira os dados atuais na conversa privada antes de aprovar novamente ou pagar.`,
         attachment_uids: [],
       });
       z.object({ uid: z.string().min(1) }).parse(receipt);
