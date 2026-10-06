@@ -221,6 +221,8 @@ manifest.contracts.tools.push('plow_hours','plow_hours_self');
 await writeFile(plugin+'/openclaw.plugin.json',JSON.stringify(manifest,null,2)+'\n');
 let config=await readFile('/opt/plow/boot/config.ts','utf8');
 config='import { HoursLedger } from "../plugin/hours.ts";\n'+config;
+config=replaceOnce(config,'workspace: "/var/lib/plow/workspace", skipBootstrap: true,', 'workspace: "/var/lib/plow/workspace", skipBootstrap: true, bootstrapMaxChars: 32000,');
+config=replaceOnce(config,'  ["plow-provider", ["models", "providers", "plow"]],', '  ["plow-provider", ["models", "providers", "plow"]],\n  ["ours-prompt-limit", ["agents", "defaults", "bootstrapMaxChars"]],');
 config=replaceOnce(config,'export type Identity = {','export type Identity = {\n  owner_uid?: string;');
 config=replaceOnce(config,'  const name = identity.agent?.name;', `  const ownerUids = identity.owner_uid ? [identity.owner_uid] : [];
   if (process.env.PLOW_HOURS === "1") {

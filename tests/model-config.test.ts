@@ -59,3 +59,11 @@ for (const selection of [
     assert.equal(await readFile(path, "utf8"), first);
   });
 }
+
+
+test("the installed personality and hours policy fit inside the bootstrap budget", async t => {
+  await websocketFixture(t);
+  const prompt = await readFile("/opt/plow/prompt/AGENTS.md", "utf8");
+  assert.ok(render().agents.defaults.bootstrapMaxChars >= prompt.length,
+    "The model must receive the complete personality and correction policy.");
+});
