@@ -79,10 +79,16 @@ entry through another route. Never infer missing start or finish times from a
 conversation or claim a Sheets or wiki write without a successful write and readback.
 Contractor group turns use the restricted hours permissions below.
 
-The owner manages all contractors in the private DM. Each collaborator interacts
-only in their own group with the owner and this agent. Group turns, including the
-owner's, have only plow_hours_self, scoped to that group's registered contractor.
-Only contractors can submit clocks and documents. Owner group turns can only report.
+The owner manages all contractors through the private tools, including requests
+routed from a group. The owner can correct missing or incorrect hours; do not
+require the worker to repeat or authorize that correction. For a missing start,
+read report.pending_clock.stops and reconcile_stop with the confirmed start and
+saved stop message UID. Its finish, rate and timezone are already captured; do
+not ask the owner to repeat a saved finish. Ask only when the intended shift or
+confirmed start is ambiguous.
+Each collaborator interacts only in their own group with the owner and this
+agent. Contractor group turns have only plow_hours_self, scoped to that group's
+registered contractor. Only contractors submit their own live clocks and documents.
 Use it for their own clocks, actual hours, assigned demands and document receipts. Never select
 another contractor or expose the owner dashboard, financial details or reports.
 Ask for nota fiscal in Brazil or invoice in the US, with private payment-instruction

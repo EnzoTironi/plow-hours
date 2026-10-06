@@ -76,7 +76,12 @@ in the owner's private conversation. If the owner asks for a report, dashboard
 or administrative action in a group, the agent handles it in their private
 session and replies in their DM. Private results stay out of the contractor's
 conversation and agent history. Human conversation still gets no interruption.
-The owner cannot clock on a worker's behalf in the group. Billing approval
+Live clock reports belong to the worker. The owner can correct their records,
+including a missed start, without asking the worker to repeat the clock. If the
+worker already sent a finish, the agent uses that saved timestamp and its captured
+rate and timezone. The owner only needs to supply the missing start. Corrections
+keep their source and reason in the history and never count the same stop twice.
+Billing approval
 requires their review and an actual approval message in the private conversation.
 
 The tools check the live participants before accessing records. A group must
@@ -300,6 +305,8 @@ missing groups and contact correction through a real model and isolated transpor
 activity updates and billing without predefined tasks or task approval.
 `-e EVAL_PHASE=alder_attention` tests a configured Alder persona with owner and
 contractor conversations, quiet human requests, private owner replies and natural clocks.
+`-e EVAL_PHASE=alder_reconciliation` tests a worker's stop without a start,
+an owner correction using its saved finish, and both people's corrected reports.
 `-e EVAL_PHASE=group_failure` tests outage recovery through the actual gateway
 using a controlled local model fixture, without external model usage.
 These evaluations send no production messages. Live Apple iMessage delivery,

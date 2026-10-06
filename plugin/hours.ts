@@ -36,6 +36,8 @@ export const managementSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("void"), entry_id: text, reason: text }).strict(),
   z.object({ action: z.literal("review_entry"), entry_id: text, reason: text }).strict(),
   z.object({ action: z.literal("resolve_clock"), contractor_id: id, reason: text }).strict(),
+  z.object({ action: z.literal("reconcile_stop"), contractor_id: id, stop_message_uid: text, start: timestamp, reason: text,
+    demand_id: id.optional(), details: z.string().max(4000).default(""), project: text.optional() }).strict(),
   z.object({ action: z.literal("deactivate"), contractor_id: id, reason: text }).strict(),
   z.object({ action: z.literal("archive_demand"), contractor_id: id, demand_id: id, reason: text }).strict(),
   z.object({ action: z.literal("manual"), contractor_id: id, demand_id: id, start: timestamp, finish: timestamp,
@@ -288,6 +290,17 @@ export class HoursLedger {
     return { source: clockSourceSchema.parse(JSON.parse(recorded.source_json)), rate_cents: recorded.rate_cents, timezone: recorded.timezone };
   }
 
+  private unmatchedStops(contractorId: string) {
+    return this.db.prepare("SELECT source, source_json, details FROM unmatched_stops WHERE contractor_id=?").all(contractorId)
+      .map(row => z.object({ source: text, source_json: z.string(), details: z.string() }).parse(row))
+      .map(row => {
+        const message = clockSourceSchema.parse(JSON.parse(row.source_json));
+        const captured = this.recordedClockSource(message);
+        return { source: row.source, message, details: row.details,
+          rate_cents: captured?.rate_cents ?? null, timezone: captured?.timezone ?? null };
+      }).sort((a, b) => Date.parse(a.message.created_at) - Date.parse(b.message.created_at));
+  }
+
   private startClock(contractor: Contractor, input: ClockSource, command: StartIntent): string {
     const pending = this.pendingStart(contractor.id);
     const original = this.recordedClockSource(input) ?? { source: input, rate_cents: contractor.rate_cents, timezone: contractor.timezone };
@@ -320,11 +333,8 @@ export class HoursLedger {
       project: workText(command.project ?? "Uncategorized", this.billing.secrets(contractor.id)),
       summary: description.slice(0,2000) || "Work in progress", references: "", active: 1, reported: 1,
     };
-    const waiting = this.db.prepare("SELECT source, source_json, details FROM unmatched_stops WHERE contractor_id=?").all(contractor.id)
-      .map(row => z.object({ source: text, source_json: z.string(), details: z.string() }).parse(row))
-      .map(row => ({ ...row, message: clockSourceSchema.parse(JSON.parse(row.source_json)) }))
-      .filter(row => row.message.line_uid === input.line_uid && row.message.chat_uid === input.chat_uid && Date.parse(row.message.created_at) > ms)
-      .sort((a, b) => Date.parse(a.message.created_at) - Date.parse(b.message.created_at))[0];
+    const waiting = this.unmatchedStops(contractor.id)
+      .find(row => row.message.line_uid === input.line_uid && row.message.chat_uid === input.chat_uid && Date.parse(row.message.created_at) > ms);
     const finish = waiting ? Date.parse(waiting.message.created_at) : null;
     if (this.overlaps(contractor.id, ms, finish, source)) return this.clockConflict(contractor, origin.source, "Esse horário cruza um ponto existente.");
     if (this.billing.isLocked(contractor.id, ms, finish)) return this.clockConflict(contractor, origin.source, "Este início chegou depois do fechamento do período.");
@@ -501,6 +511,37 @@ export class HoursLedger {
           this.audit(source, input.action, before, input);
           return { resolved: true, contractor_id: input.contractor_id, reason: input.reason };
         }
+        case "reconcile_stop": {
+          const contractor = this.contractor(input.contractor_id);
+          const stop = this.unmatchedStops(contractor.id).find(s => s.message.message_uid === input.stop_message_uid);
+          if (!stop) throw new Error("That unmatched stop is unavailable for this contractor. Read the report before changing an existing entry.");
+          if (stop.rate_cents === null || stop.timezone === null) throw new Error("The stop timestamp is saved, but its historical rate or timezone is unavailable. The owner must confirm them for a manual correction.");
+          if (this.pendingStart(contractor.id)) throw new Error("Review the existing pending start before reconciling this missing start.");
+          const start = Date.parse(input.start), finish = Date.parse(stop.message.created_at);
+          if (finish <= start) throw new Error("The confirmed start must be before the saved stop.");
+          const entryId = `hours_${createHash("sha256").update(stop.source).digest("hex").slice(0,24)}`;
+          this.billing.assertUnlocked(contractor.id, start, finish);
+          if (this.overlaps(contractor.id, start, finish, entryId)) throw new Error("The correction overlaps another time entry.");
+          const assigned = input.demand_id ? this.db.prepare("SELECT * FROM demands WHERE id=? AND contractor_id=?").get(input.demand_id, contractor.id) : undefined;
+          if (input.demand_id && !assigned) throw new Error("The referenced demand does not belong to this contractor.");
+          const secrets = this.billing.secrets(contractor.id);
+          const details = workText([input.details, stop.details].filter(Boolean).join("\n"), secrets);
+          const demand = assigned ? demandSchema.parse(assigned) : {
+            id: `activity_${createHash("sha256").update(stop.source).digest("hex").slice(0,24)}`,
+            project: workText(input.project ?? "Uncategorized", secrets), summary: details.slice(0,2000) || "Work session",
+          };
+          if (!assigned) this.db.prepare('INSERT INTO demands(id, contractor_id, project, summary, "references", reported) VALUES (?, ?, ?, ?, ?, 1)')
+            .run(demand.id, contractor.id, demand.project, demand.summary, "");
+          this.db.prepare("INSERT INTO entries(id, contractor_id, demand_id, start_ms, end_ms, rate_cents, timezone, details, start_message, stop_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            .run(entryId, contractor.id, demand.id, start, finish, stop.rate_cents, stop.timezone, details, receiptKey, stop.source);
+          this.db.prepare("DELETE FROM unmatched_stops WHERE source=?").run(stop.source);
+          this.db.prepare("UPDATE clock_inbox SET complete=1, review_reason='', source_json=json_set(source_json, '$.body', '') WHERE source=?").run(stop.source);
+          this.db.prepare("UPDATE receipts SET response=? WHERE source=?")
+            .run(`O dono confirmou o início às ${localTime(start, stop.timezone)}. Ponto encerrado às ${localTime(finish, stop.timezone)}; ${hours(finish - start)} h registradas.`, stop.source);
+          this.bump(contractor.id);
+          this.audit(source, input.action, stop, { ...input, entry_id: entryId, start_ms: start, end_ms: finish, rate_cents: stop.rate_cents, timezone: stop.timezone });
+          return { recorded: true, entry_id: entryId, start_ms: start, end_ms: finish, hours: hours(finish - start), rate_cents: stop.rate_cents, timezone: stop.timezone, stop_message_uid: stop.message.message_uid };
+        }
         case "deactivate": {
           const before = this.contractor(input.contractor_id);
           if (this.open(before.id) || this.pendingStart(before.id) || this.pendingClockMessagesForContractor(before.id).length
@@ -661,10 +702,13 @@ export class HoursLedger {
         "", "## Time entries", "", ...entries.map(e => `- ${markdownText(e.id)}: ${localTime(e.start_ms, e.timezone)} to ${e.voided ? "voided, excluded from totals" : e.end_ms === null ? "open, excluded from totals" : localTime(e.end_ms, e.timezone)}; ${e.demand_id}; ${markdownText(e.details)}`),
         "", "Generated from the hours ledger. Closed entries only count toward totals. No payment has been sent.",
       ].join("\n");
+      const stops = this.unmatchedStops(contractor.id);
       return {
         contractor, demands, entries, total_hours: hours(duration), open_entry: active ?? null,
         review_needed: entries.filter(needsReview).map(e => e.id),
-        pending_clock: { start: this.pendingStart(contractor.id)?.source.created_at ?? null, timezone: this.pendingStart(contractor.id)?.timezone ?? null, unmatched_stops: Number(this.db.prepare("SELECT COUNT(*) AS count FROM unmatched_stops WHERE contractor_id=?").get(contractor.id)?.count ?? 0), messages: this.pendingClockMessagesForContractor(contractor.id).length,
+        pending_clock: { start: this.pendingStart(contractor.id)?.source.created_at ?? null, timezone: this.pendingStart(contractor.id)?.timezone ?? null, unmatched_stops: stops.length, messages: this.pendingClockMessagesForContractor(contractor.id).length,
+          stops: stops.map(stop => ({ message_uid: stop.message.message_uid, created_at: stop.message.created_at,
+            timezone: stop.timezone, details: workText(stop.details, secrets) })),
           reviews: this.db.prepare("SELECT source, json_extract(source_json, '$.created_at') AS created_at, review_reason FROM clock_inbox WHERE contractor_id=? AND review_reason!='' ORDER BY created_at").all(contractor.id) },
         audit: this.db.prepare("SELECT * FROM audit WHERE COALESCE(json_extract(after_json, '$.contractor_id'), json_extract(after_json, '$.id')) = ? ORDER BY seq").all(contractor.id)
           .map(row => ({ ...row, before_json: row.before_json === null ? null : JSON.stringify(workRecord(JSON.parse(String(row.before_json)), secrets)), after_json: JSON.stringify(workRecord(JSON.parse(String(row.after_json)), secrets)) })),
