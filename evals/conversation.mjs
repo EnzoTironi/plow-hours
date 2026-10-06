@@ -19,7 +19,7 @@ const { WebSocketServer } = createRequire('/app/package.json')('ws');
 const token = process.env.PLOW_AGENT_TOKEN;
 if (!token) throw new Error('Pass the private plow-credentials with --env-file.');
 const toolProtocol = process.env.EVAL_PHASE === 'tool_protocol';
-const glmClock = process.env.EVAL_PHASE === 'glm_clock';
+const workerClock = ['glm_clock', 'worker_clock'].includes(process.env.EVAL_PHASE);
 const controlledRecovery = toolProtocol || process.env.EVAL_PHASE === 'group_failure';
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
@@ -202,7 +202,7 @@ if (process.env.EVAL_CODEX_AUTH) await promisify(execFile)(process.execPath, ['-
   if(!credential)throw new Error('Authorized test OAuth credentials unavailable');
   upsertAuthProfile({profileId:'openai:eval',credential});
 `], { env: process.env });
-if (controlledRecovery || glmClock) {
+if (controlledRecovery || workerClock) {
   const group = { uid: 'cht_eval_ana', status: 'active', trusted: false, participants: [owner, ana, self] };
   chats.set(group.uid, group); messages.set(group.uid, []);
   const seeded = new HoursLedger('/var/lib/plow/plow-hours');
@@ -274,7 +274,7 @@ try {
   await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
   await delay(1500);
   ledger = new HoursLedger('/var/lib/plow/plow-hours');
-  if (glmClock) {
+  if (workerClock) {
     const group = chats.get('cht_eval_ana');
     const started = await say(ana, group.uid, 'Entrei agr', '2026-10-06T09:00:00-03:00');
     check('The screenshot wording invokes the real scoped clock tool instead of printing a call', () => {
@@ -298,8 +298,8 @@ try {
       assert.ok(earnings.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'report'));
       assert.match(earnings.responses.map(r => r.body).join('\n'), /30/);
     });
-    check('Every message used real GLM 5.3 Flash with only the worker tool and no internal syntax sent', () => {
-      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200 && r.model === 'z-ai/glm-5.3-flash'));
+    check('Every message used real Claude Sonnet 5 with only the worker tool and no internal syntax sent', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200 && r.model === 'anthropic/claude-sonnet-5'));
       assert.ok(modelRequests.every(r => r.tool_names.every(name => name === 'plow_hours_self')));
       assert.ok(deliveries.every(r => !/<tool_call|arg_value|Wait, let me/.test(r.body)));
     });

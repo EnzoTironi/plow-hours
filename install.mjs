@@ -214,15 +214,20 @@ config=replaceOnce(config,'    channels: { plow: {','    surfaces: { plow: { sil
 config=replaceOnce(config,'  ["plow-channel", ["channels", "plow"]],','  ["plow-channel", ["channels", "plow"]],\n  ["plow-silent-reply", ["surfaces", "plow", "silentReply"]],');
 config=replaceOnce(config,
   '{ id: "z-ai/glm-5.2", name: "GLM 5.2", input: ["text"], contextWindow: 1048576, cost: { input: 0.5544, output: 1.7424 } },',
-  '{ id: "z-ai/glm-5.3-flash", name: "GLM 5.3 Flash", reasoning: true, input: ["text", "image"], contextWindow: 1310720, maxTokens: 131072 },');
-config=replaceOnce(config,'primary: "plow/z-ai/glm-5.2"','primary: "plow/z-ai/glm-5.3-flash"');
+  '{ id: "openai/gpt-6-sol", name: "GPT 6 Sol", reasoning: true, input: ["text", "image"], contextWindow: 1050000, maxTokens: 128000 },');
+config=replaceOnce(config,'primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"]',
+  'primary: "plow/anthropic/claude-sonnet-5", fallbacks: ["plow/openai/gpt-6-sol"]');
 config=replaceOnce(config,'  for (const [file, path] of ownedPaths) {',`  for (const path of [["agents", "defaults", "model"], ["agents", "entries", "main", "model"]]) {
     const selected = getPath(owner, path);
-    if (selected === "plow/z-ai/glm-5.2") {
+    const previousDefaults = ["plow/z-ai/glm-5.2", "plow/z-ai/glm-5.3-flash"];
+    if (typeof selected === "string" && previousDefaults.includes(selected)) {
       const parent = parentAt(owner, path, false);
-      if (parent) parent.model = "plow/z-ai/glm-5.3-flash";
-    } else if (isObject(selected) && selected.primary === "plow/z-ai/glm-5.2") {
-      selected.primary = "plow/z-ai/glm-5.3-flash";
+      if (parent) parent.model = "plow/anthropic/claude-sonnet-5";
+    } else if (isObject(selected) && typeof selected.primary === "string" && previousDefaults.includes(selected.primary)) {
+      selected.primary = "plow/anthropic/claude-sonnet-5";
+      if (Array.isArray(selected.fallbacks) && selected.fallbacks.length === 1 && selected.fallbacks[0] === selected.primary) {
+        selected.fallbacks = ["plow/openai/gpt-6-sol"];
+      }
     }
   }
 

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { renderConfig, syncConfig } from "../boot/config.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
+const primary = "plow/anthropic/claude-sonnet-5";
 const flash = "plow/z-ai/glm-5.3-flash";
 const legacy = "plow/z-ai/glm-5.2";
 const model = z.union([z.string(), z.object({ primary: z.string(), fallbacks: z.array(z.string()).optional() })]);
@@ -17,7 +18,7 @@ function render() {
   return renderConfig({ owner_uid: "owner-account", line: { uid: "line" }, agent: { name: "Ours" }, chats: [] }, "http://fixture", "untrusted");
 }
 
-test("a new installation boots with the Plow GLM 5.3 Flash catalog and default", async t => {
+test("a new installation boots with Claude Sonnet 5 and a GPT 6 Sol fallback", async t => {
   await websocketFixture(t);
   const config = render();
   const root = process.env.OPENCLAW_STATE_DIR;
@@ -25,16 +26,19 @@ test("a new installation boots with the Plow GLM 5.3 Flash catalog and default",
   const path = join(root, "openclaw.json");
   await syncConfig(config, path, join(root, "includes"));
   const saved = savedConfig.parse(JSON.parse(await readFile(path, "utf8")));
-  assert.equal(config.models.providers.plow.models[0].id, "z-ai/glm-5.3-flash");
+  assert.equal(config.models.providers.plow.models[0].id, "openai/gpt-6-sol");
   assert.equal(config.models.providers.plow.models[0].reasoning, true);
-  assert.deepEqual(saved.agents.defaults.model, { primary: flash, fallbacks: ["plow/anthropic/claude-sonnet-5"] });
+  assert.ok(config.models.providers.plow.models.some(entry => entry.id === "anthropic/claude-sonnet-5"));
+  assert.deepEqual(saved.agents.defaults.model, { primary, fallbacks: ["plow/openai/gpt-6-sol"] });
 });
 
 for (const selection of [
-  { name: "legacy object", before: { primary: legacy, fallbacks: ["custom/fallback"] }, after: { primary: flash, fallbacks: ["custom/fallback"] } },
-  { name: "legacy string", before: legacy, after: flash },
+  { name: "legacy object", before: { primary: legacy, fallbacks: ["custom/fallback"] }, after: { primary, fallbacks: ["custom/fallback"] } },
+  { name: "legacy string", before: legacy, after: primary },
+  { name: "Flash default object", before: { primary: flash, fallbacks: [primary] }, after: { primary, fallbacks: ["plow/openai/gpt-6-sol"] } },
+  { name: "Flash default string", before: flash, after: primary },
   { name: "another explicit model", before: { primary: "openai/custom", fallbacks: ["custom/fallback"] }, after: { primary: "openai/custom", fallbacks: ["custom/fallback"] } },
-  { name: "already migrated", before: flash, after: flash },
+  { name: "already migrated", before: primary, after: primary },
 ]) {
   test(`updating ${selection.name} preserves owner settings and is repeatable`, async t => {
     await websocketFixture(t);
