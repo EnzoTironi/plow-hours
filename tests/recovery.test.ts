@@ -33,10 +33,11 @@ test("v4 database upgrades preserve sources, captured rates, invoices and legacy
     const report = ledger.report("ana")[0]!;
     assert.equal(report.total_hours, 2); assert.equal(report.entries[0]?.rate_cents, 3000); assert.equal(report.entries[0]?.start_message, "original-start");
     assert.equal(ledger.billingReport("ana").invoice?.number, "NF-OLD");
-    assert.ok(!JSON.stringify(ledger.billingReport("ana")).includes("private-old-key"));
+    assert.deepEqual(ledger.billingReport("ana").payment, { method: "pix", beneficiary: "Ana", key: "private-old-key" });
     ledger.close(); ledger = new HoursLedger(root);
     ledger.bindInstallation("line-original", "owner-original");
     assert.equal(ledger.report("ana")[0]?.entries.length, 1);
+    assert.equal(ledger.billingReport("ana").payment?.method, "pix");
     assert.equal((await stat(join(root, "hours.sqlite"))).mode & 0o777, 0o600);
   } finally { ledger.close(); }
 });

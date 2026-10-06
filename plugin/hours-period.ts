@@ -9,15 +9,6 @@ export const LONG_SESSION_MS = 12 * 3_600_000;
 export const needsReview = (entry: z.infer<typeof entrySchema>) => !entry.voided && !entry.reviewed
   && (entry.end_ms ?? Date.now()) - entry.start_ms > LONG_SESSION_MS;
 
-// Banking instructions belong in a private document, never in work exports.
-export function workText(value: string, secrets: readonly string[] = []): string {
-  let result = value.replace(/\b(?:chave\s+pix|pix(?:\s+key)?|routing(?:\s+number)?|(?:bank\s+)?account(?:\s+number)?|conta(?:\s+banc[aá]ria)?|ssn|cpf|tax\s+id)\s*[:=][^\r\n]*/gi, "[financial details omitted]")
-    .replace(/\b(chave\s+pix|pix\s+key)\s+(?:[^\s@]+@[^\s@]+\.[^\s@]+|\+?\d[\d .()-]{8,20}|[a-f0-9]{8}-[a-f0-9-]{27,})/gi, "$1 [private]")
-    .replace(/\b(routing\s+number|account\s+number|ssn|cpf|tax\s+id)\s+\d[\d .-]{3,20}/gi, "$1 [private]");
-  for (const secret of secrets) if (secret.length >= 4) result = result.replaceAll(secret, "[private]");
-  return result;
-}
-
 function dayAt(ms: number, timezone: string) {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
 }

@@ -31,16 +31,11 @@ entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(a
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
-entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerAddressesAgent, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
+entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
 entry=replaceOnce(entry,'ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {','ingress: TurnIngress, log: (text: string) => void, ownerGroup?: Chat): Promise<TurnOutcome> {');
 const kindLine='  const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";';
 const inboundKind = kindLine+'\n  const peer = { kind, id:';
 entry=replaceOnce(entry,inboundKind,kindLine+`\n  if (hoursEnabled() && account.accountId === "chat" && senderIsOwner && kind === "group") {
-    if (!ownerAddressesAgent(chat, message, [process.env.AGENT_NAME, ...Object.values(cfg.agents?.entries ?? {}).map(agent => agent?.identity?.name)])) {
-      ingress.onSubmitted();
-      log(\`completed chat=\${chat.uid} owner group message not addressed to the agent: no turn\`);
-      return "completed";
-    }
     const destination = await ownerPrivateConversation(account, chat, message);
     return receive(account, cfg, destination.chat, { ...message, sender: destination.sender }, firstContact, history, ingress, log, chat);
   }\n  const peer = { kind, id:`);
@@ -89,29 +84,41 @@ entry=replaceOnce(entry,'payload: { first_contact: firstContact, trusted: chat.t
 entry=replaceOnce(entry,'})), rawBody: body },', `})), rawBody: ownerGroup
       ? "[Message origin: " + JSON.stringify({ kind: "group", chat_uid: ownerGroup.uid, name: ownerGroup.display_name ?? null }) + "; default final reply destination: owner DM.]\\n" + body
       : body },`);
-entry=replaceOnce(entry,'  const body = message.body ||', '  const body = (hoursRestricted ? workText(message.body) : message.body) ||');
-entry=replaceOnce(entry,'      body: m.body, timestamp:', '      body: hoursRestricted ? workText(m.body) : m.body, timestamp:');
-entry=replaceOnce(entry,'body: message.reply_to.body, sender:', 'body: hoursRestricted ? workText(message.reply_to.body) : message.reply_to.body, sender:');
 const prompt='      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),';
 entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdoptionLifecycle: ingress,\n      ...(hoursEnabled() && account.accountId === "chat" ? { disableBlockStreaming: true } : {}),\n      ...(ownerGroup || hoursRestricted && kind === "group" ? { suppressTyping: true } : {}),');
 const preparePayload='      preparePayload: (payload, info) => {';
 entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursEnabled() && account.accountId === "chat") {
+          if (payload.isError) {
+            failure = new Error("Agent reply failed");
+            log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=model_error kind=\${info.kind}\`);
+            return null;
+          }
           if (info.kind !== "final" || isReasoningReplyPayload(payload)) return null;
           if ((payload.text ?? "").split("\\n").some(line => isSilentReplyText(line))) {
             silent = true;
+            log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=model_silent\`);
             return null;
           }
-        }
-        if (hoursRestricted && payload.isError) {
-          failure = new Error("Contractor turn could not complete");
-          if (kind === "group") return null;
-          return { ...payload, text: "Não consegui processar sua mensagem agora. Tente novamente. Não confirmei nenhuma alteração neste aviso.", replyToId: undefined, replyToCurrent: false };
         }`);
 entry=replaceOnce(entry,prompt,prompt+`\n      ...(hoursRestricted ? { groupSystemPrompt: hoursContractor
         ? contractorGroupPrompt(hoursContractor.id)
         : unavailableGroupPrompt(chat, kind === "group") } : {}),
       ...(ownerGroup ? { groupSystemPrompt: ownerGroupPrompt(ownerGroup) } : {}),`);
-entry=replaceOnce(entry,'if (payload.isFallbackNotice) { silent ||= email;', 'if (payload.isFallbackNotice) { silent ||= email || !!ownerGroup;');
+entry=replaceOnce(entry,'if (payload.isFallbackNotice) { silent ||= email; return null; }', `if (payload.isFallbackNotice) {
+          silent ||= email;
+          log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=empty_reply\`);
+          return null;
+        }`);
+entry=replaceOnce(entry,'  if (failure && !silent) throw failure;', `  if (failure && (!silent || hoursEnabled() && account.accountId === "chat")) {
+    log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=failed\`);
+    throw failure;
+  }`);
+entry=replaceOnce(entry,'  log(`${outcome} chat=${chat.uid} message=${message.uid}`);', `  if (hoursEnabled() && account.accountId === "chat") {
+    const reason = outcome === "deferred" ? "deferred" : silent || dispatchResult.deliberateSilentTerminalReply ? "model_silent"
+      : deliveredToOwner || observedReplyDelivery || hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery }) ? "delivered" : "empty_reply";
+    log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=\${reason} outcome=\${outcome}\`);
+  }
+  log(\`\${outcome} chat=\${chat.uid} message=\${message.uid}\`);`);
 entry=replaceOnce(entry,'      deliver: async payload => {',`      deliver: async payload => {
         if (ownerGroup) {
           const text = (payload.text ?? "").trim();

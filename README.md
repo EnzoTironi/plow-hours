@@ -142,12 +142,16 @@ person's group.
 
 | Country | Paperwork | Payment instructions |
 | --- | --- | --- |
-| Brazil | Nota fiscal number, amount, currency and private document link | Beneficiary and a private document containing the Pix key |
-| United States | Invoice number, amount, currency and private document link | Beneficiary, bank, account type, last four digits and a private document with full ACH instructions |
+| Brazil | Nota fiscal number, amount, currency and document link | Beneficiary and Pix key |
+| United States | Invoice number, amount, currency and document link | Beneficiary, bank, account type, routing and account numbers |
 
-Share those documents privately with the owner. Full Pix keys, bank account and
-routing numbers, and tax IDs belong in the documents, not the group. A W-9 is
-requested only when the owner explicitly asks for it.
+Contractors can send their payment details directly in their own group, before
+any invoice, billing request or approval. The agent saves them on their profile
+and confirms without repeating the key or bank numbers. No private form or
+document link is required for payment details. Each worker's payment profile is
+separate from their time entries and other contractors' records. Work notes are
+exported as recorded, including any data people put in them. A W-9 is requested only when the owner
+explicitly asks for it.
 
 Closing the period freezes its hours and value. Open clocks, unresolved clock
 events and sessions over 12 hours needing review must be resolved first. Billing
@@ -212,10 +216,9 @@ Time tracking and the web view need neither a connected Mac nor Google Sheets.
 Optional Sheets and wiki projections use the owner's Mac through
 [Latch](https://github.com/plow-pbc/latch), with a write and readback before a
 projection is marked current. Sheets API creation is not included; it needs
-backend OAuth permissions outside this repository. Work exports omit stored
-financial document links and redact known banking details, but arbitrary
-sensitive prose cannot all be recognized. Redaction does not erase messages
-already sent. Use private documents from the start.
+backend OAuth permissions outside this repository. Work exports preserve the
+recorded descriptions. Structured invoice and payment profiles are stored
+separately from work entries.
 
 ## Install
 
@@ -329,6 +332,9 @@ contractor conversations, quiet human requests, private owner replies and natura
 an owner correction using its saved finish, and both people's corrected reports.
 `-e EVAL_PHASE=group_failure` tests outage recovery through the actual gateway
 using a controlled local model fixture, without external model usage.
+`-e EVAL_PHASE=semantic_payment` tests owner requests without mentions, quiet human
+conversation, direct Pix and ACH registration before billing, private owner
+retrieval, contractor isolation and clocks through the real model and tools.
 These evaluations send no production messages. Live Apple iMessage delivery,
 hosted deployment and the chosen off-host backup destination need separate checks.
 

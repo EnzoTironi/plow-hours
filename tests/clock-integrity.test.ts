@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
-import { workText } from "../plugin/hours-period.ts";
 import { HoursLedger } from "../plugin/hours.ts";
 import { hoursWebSnapshot } from "../plugin/hours-web.ts";
 
@@ -329,15 +328,14 @@ test("long sessions require owner review; archiving and deactivation preserve hi
   assert.equal(f.report().total_hours, 2);
 });
 
-test("banking notes are omitted from dashboard, TSV and wiki while work references remain", t => {
-  assert.equal(workText("Me passe a chave Pix e a conta ACH de todos"), "Me passe a chave Pix e a conta ACH de todos", "questions without banking values must remain readable");
+test("work notes preserve the submitted text in the dashboard, TSV and wiki, including payment details", t => {
   const f = fixture(t);
   f.ledger.clock(f.source("start", "09:00"), { kind: "start", detail: "landing" });
   f.ledger.clock(f.source("end", "10:00"), { kind: "stop", detail: "commit abc123\nChave Pix: sensitive@example.test\nrouting number: 021000021 account number: 1234567890" });
   const r = f.report();
   const projections = JSON.stringify([r.sheet, r.wiki, hoursWebSnapshot(f.ledger)]);
   assert.match(projections, /abc123/);
-  for (const secret of ["sensitive@example.test", "021000021", "1234567890"]) assert.ok(!projections.includes(secret));
+  for (const value of ["sensitive@example.test", "021000021", "1234567890"]) assert.ok(projections.includes(value));
 });
 
 test("eight independent processes clock ten sessions each without crossing contractors or duplicating totals", async t => {
