@@ -31,7 +31,7 @@ entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(a
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
-entry='import { z } from "zod";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
+entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
 entry=replaceOnce(entry,'ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {','ingress: TurnIngress, log: (text: string) => void, ownerGroup?: Chat): Promise<TurnOutcome> {');
 const kindLine='  const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";';
 const inboundKind = kindLine+'\n  const peer = { kind, id:';
@@ -88,9 +88,16 @@ entry=replaceOnce(entry,'  const body = message.body ||', '  const body = (hours
 entry=replaceOnce(entry,'      body: m.body, timestamp:', '      body: hoursRestricted ? workText(m.body) : m.body, timestamp:');
 entry=replaceOnce(entry,'body: message.reply_to.body, sender:', 'body: hoursRestricted ? workText(message.reply_to.body) : message.reply_to.body, sender:');
 const prompt='      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),';
-entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdoptionLifecycle: ingress,\n      ...(ownerGroup || hoursRestricted && kind === "group" ? { suppressTyping: true } : {}),');
+entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdoptionLifecycle: ingress,\n      ...(hoursEnabled() && account.accountId === "chat" ? { disableBlockStreaming: true } : {}),\n      ...(ownerGroup || hoursRestricted && kind === "group" ? { suppressTyping: true } : {}),');
 const preparePayload='      preparePayload: (payload, info) => {';
-entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursRestricted && payload.isError) {
+entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursEnabled() && account.accountId === "chat") {
+          if (info.kind !== "final" || isReasoningReplyPayload(payload)) return null;
+          if ((payload.text ?? "").split("\\n").some(line => isSilentReplyText(line))) {
+            silent = true;
+            return null;
+          }
+        }
+        if (hoursRestricted && payload.isError) {
           failure = new Error("Contractor turn could not complete");
           if (kind === "group") return null;
           return { ...payload, text: "Não consegui processar sua mensagem agora. Tente novamente. Não confirmei nenhuma alteração neste aviso.", replyToId: undefined, replyToCurrent: false };
@@ -102,7 +109,7 @@ entry=replaceOnce(entry,prompt,prompt+`\n      ...(hoursRestricted ? { groupSyst
 entry=replaceOnce(entry,'if (payload.isFallbackNotice) { silent ||= email;', 'if (payload.isFallbackNotice) { silent ||= email || !!ownerGroup;');
 entry=replaceOnce(entry,'      deliver: async payload => {',`      deliver: async payload => {
         if (ownerGroup) {
-          const text = (payload.text ?? "").split("\\n").filter(line => line.trim() !== "NO_REPLY").join("\\n").trim();
+          const text = (payload.text ?? "").trim();
           if (!text || (!payload.isError && text.startsWith(NO_REPLY_FALLBACK))) {
             silent = true;
             return { messageIds: [] };

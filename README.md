@@ -48,7 +48,9 @@ The group is still a place for people to talk. “Alex, can you check the landin
 page?” is a message to Alex. The agent stays quiet. It participates when called,
 when someone answers its question, or when the contractor clearly submits their
 own work or requested documents for recording. Plans, questions and quoted
-examples do not start a clock.
+examples do not start a clock. The channel sends final replies only, keeping
+intermediate commentary and reasoning out of iMessage. Quiet group conversation
+also stays quiet in your private chat.
 
 Repeat the setup for each contractor. One bot serves the team, with a separate
 three-person group for each worker.

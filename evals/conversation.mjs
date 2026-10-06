@@ -22,14 +22,16 @@ const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
 const groupDelivery = process.env.EVAL_PHASE === 'alder_group_delivery';
 const ownEarnings = process.env.EVAL_PHASE === 'alder_earnings';
-const alderAttention = ['alder_attention', 'alder_reconciliation', 'alder_group_delivery', 'alder_legacy_reconciliation', 'alder_earnings'].includes(process.env.EVAL_PHASE);
+const privateNoise = process.env.EVAL_PHASE === 'alder_private_noise';
+const danielCycle = groupDelivery || ownEarnings || privateNoise;
+const alderAttention = ['alder_attention', 'alder_reconciliation', 'alder_group_delivery', 'alder_legacy_reconciliation', 'alder_earnings', 'alder_private_noise'].includes(process.env.EVAL_PHASE);
 const agentName = alderAttention ? 'Alder' : 'Plow Hours';
 if (alderAttention) process.env.AGENT_NAME = agentName;
 const owner = { type: 'member', uid: 'mem_eval_owner', role: 'owner', display_name: alderAttention ? 'Enzo' : 'Dane', provider_key: '+15550000001' };
 const ana = { ...owner, uid: 'mem_eval_ana', role: 'member', display_name: 'Ana', provider_key: '+15550000002' };
-const ben = { ...ana, uid: 'mem_eval_ben', display_name: groupDelivery || ownEarnings ? 'Pueblo' : 'Ben', provider_key: 'ben@example.test' };
+const ben = { ...ana, uid: 'mem_eval_ben', display_name: danielCycle ? 'Pueblo' : 'Ben', provider_key: 'ben@example.test' };
 const alexWrong = { ...ana, uid: 'mem_eval_alex_wrong', display_name: 'Alex', provider_key: 'alex@unreachable.example.test' };
-const alex = { ...alexWrong, uid: 'mem_eval_alex', display_name: groupDelivery || ownEarnings ? 'Daniel' : alderAttention ? 'Pueblo' : 'Alex', provider_key: groupDelivery || ownEarnings ? 'daniel@example.test' : alderAttention ? 'pueblo@example.test' : 'alex@example.test' };
+const alex = { ...alexWrong, uid: 'mem_eval_alex', display_name: danielCycle ? 'Daniel' : alderAttention ? 'Pueblo' : 'Alex', provider_key: danielCycle ? 'daniel@example.test' : alderAttention ? 'pueblo@example.test' : 'alex@example.test' };
 const self = { type: 'agent', relationship: 'self', line: { uid: 'ln_eval', display_name: agentName } };
 const home = { uid: 'cht_eval_owner', status: 'active', trusted: false, participants: [owner, self] };
 const chats = new Map([[home.uid, home]]);
@@ -311,6 +313,59 @@ try {
       unconfirmed(followup); noFallback(followup);
     });
     check('The delivery conversation uses successful real model calls', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
+    });
+  } else if (privateNoise) {
+    const onboard = await say(owner, home.uid, `Cadastre Pueblo, ${ben.provider_key}, USD 20/h, America/Sao_Paulo, e Daniel, ${alex.provider_key}, USD 5000/h, America/Los_Angeles. Crie um grupo separado comigo e cada um deles. Não há tarefas cadastradas.`);
+    check('Two-contractor onboarding has one private confirmation and no invented receipt', () => {
+      assert.equal(groupRequests.length, 2);
+      assert.equal(onboard.responses.filter(r => r.chat_uid === home.uid).length, 1);
+      const text = onboard.responses.filter(r => r.chat_uid === home.uid).map(r => r.body).join('\n');
+      assert.match(text, /n[aã]o.{0,30}confirmad|sem.{0,15}confirma[cç][aã]o|unconfirmed/i);
+      assert.ok(!/cada um recebeu|ambos receberam|both received|everyone received/i.test(text));
+      const reports = ledger.report();
+      assert.equal(reports.find(r => r.contractor.handle === alex.provider_key)?.contractor.rate_cents, 500000);
+      assert.equal(reports.find(r => r.contractor.handle === ben.provider_key)?.contractor.rate_cents, 2000);
+    });
+    const confirmation = await say(owner, home.uid, 'Já criou os dois grupos?');
+    check('An onboarding follow-up has one final DM reply and creates no extra group', () => {
+      assert.equal(groupRequests.length, 2);
+      assert.equal(confirmation.responses.length, 1);
+      assert.equal(confirmation.responses[0].chat_uid, home.uid);
+      assert.ok(!/cada um recebeu|ambos receberam|both received|everyone received/i.test(confirmation.responses[0].body));
+    });
+    async function quiet(chatUid, input) {
+      const before = ledger.report();
+      const turn = await say(owner, chatUid, input);
+      check('Human conversation emits nothing in any chat: ' + input, () => {
+        assert.ok(turn.model_requests > 0);
+        assert.deepEqual(turn.responses, []);
+        assert.deepEqual(turn.tool_calls, []);
+        assert.deepEqual(ledger.report(), before);
+      });
+    }
+    await quiet('cht_eval_alex', 'Dane, cria tua conta como owner e começa a usar.');
+    await quiet('cht_eval_alex', 'Boa noite, Daniel!');
+    await quiet('cht_eval_ben', 'Pueblo, consegue registrar seu trabalho a partir de agora por aqui?');
+    const guidance = await say(owner, 'cht_eval_alex', 'Alder, explica para o Daniel como registrar as horas por aqui.');
+    check('An addressed public explanation reaches only Daniel’s source group', () => {
+      assert.equal(guidance.responses.length, 1);
+      assert.equal(guidance.responses[0].chat_uid, 'cht_eval_alex');
+      assert.ok(guidance.tool_calls.some(c => c.name === 'plow_reply_to' && c.args.chat_uid === 'cht_eval_alex'));
+      assert.ok(!/ben@example|Pueblo|hours\.example\.test|NO_REPLY|reasoning:/i.test(guidance.responses[0].body));
+    });
+    const dashboard = await say(owner, 'cht_eval_ben', 'Alder, me envie o dashboard das horas.');
+    check('A private owner answer keeps its concise group status and exactly one final DM', () => {
+      assert.ok(privateOwnerReply(dashboard, 'cht_eval_ben').includes('https://hours.example.test/hours'));
+      assert.equal(dashboard.responses.filter(r => r.chat_uid === home.uid).length, 1);
+    });
+    const worker = await say(alex, 'cht_eval_alex', 'Alder, como faço para registrar meu horário?');
+    check('A contractor’s actual question gets one final in their group without private owner content', () => {
+      assert.equal(worker.responses.length, 1);
+      assert.equal(worker.responses[0].chat_uid, 'cht_eval_alex');
+      assert.ok(!/Pueblo|ben@example|hours\.example\.test|NO_REPLY|reasoning:/i.test(worker.responses[0].body));
+    });
+    check('The private-noise conversation uses successful real model calls', () => {
       assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
     });
   } else if (groupDelivery) {
