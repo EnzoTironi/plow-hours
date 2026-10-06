@@ -25,7 +25,7 @@ const ownEarnings = process.env.EVAL_PHASE === 'alder_earnings';
 const privateNoise = process.env.EVAL_PHASE === 'alder_private_noise';
 const danielCycle = groupDelivery || ownEarnings || privateNoise;
 const alderAttention = ['alder_attention', 'alder_reconciliation', 'alder_group_delivery', 'alder_legacy_reconciliation', 'alder_earnings', 'alder_private_noise'].includes(process.env.EVAL_PHASE);
-const agentName = alderAttention ? 'Alder' : 'Plow Hours';
+const agentName = alderAttention ? 'Alder' : 'Ours';
 if (alderAttention) process.env.AGENT_NAME = agentName;
 const owner = { type: 'member', uid: 'mem_eval_owner', role: 'owner', display_name: alderAttention ? 'Enzo' : 'Dane', provider_key: '+15550000001' };
 const ana = { ...owner, uid: 'mem_eval_ana', role: 'member', display_name: 'Ana', provider_key: '+15550000002' };
@@ -302,7 +302,7 @@ try {
       assert.equal(after.contractor.timezone, 'America/New_York'); assert.equal(after.demands.length, 1);
       assert.notEqual(after.contractor.id, before.contractor.id); unconfirmed(corrected); noFallback(corrected);
     });
-    await say(alex, 'cht_eval_alex', "Hi Plow Hours, I can see the group. I'm starting the Website landing page now.");
+    await say(alex, 'cht_eval_alex', "Hi Ours, I can see the group. I'm starting the Website landing page now.");
     check('The corrected worker can clock work in their own group and the wrong profile stays inactive', () => {
       const reports = ledger.report(); assert.ok(reports.find(r => r.contractor.handle === alex.provider_key)?.open_entry);
       assert.equal(reports.find(r => r.contractor.handle === alexWrong.provider_key)?.open_entry, null);
@@ -501,7 +501,7 @@ try {
   } else if (process.env.EVAL_PHASE === 'private_notice_failure') {
     await say(owner, home.uid, `Add Alex at ${alex.provider_key}, USD 20/hour, America/New_York. Create a group with us. There is no assigned task.`);
     unconfirmedNoticeChat = 'cht_eval_alex';
-    const dashboard = await say(owner, unconfirmedNoticeChat, 'Plow Hours, send me the hours dashboard.');
+    const dashboard = await say(owner, unconfirmedNoticeChat, 'Ours, send me the hours dashboard.');
     check('An unconfirmed group notice is not retried and does not block the actual private answer', () => {
       assert.equal(noticeAttempts, 1);
       assert.equal(dashboard.tool_calls.filter(c => c.name === 'plow_reply_to').length, 1);
@@ -650,7 +650,7 @@ try {
     check('The owner can onboard a contractor without assigning or approving tasks', () => {
       assert.equal(workerReport().demands.length, 0); assert.ok(chats.has('cht_eval_alex'));
     });
-    const privateRequest = await say(owner, 'cht_eval_alex', 'Plow Hours, send me the hours dashboard and a report of all my contractors.');
+    const privateRequest = await say(owner, 'cht_eval_alex', 'Ours, send me the hours dashboard and a report of all my contractors.');
     check('An owner request from the group executes in the private session and replies only in their DM', () => {
       assert.ok(privateRequest.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'dashboard'));
       assert.ok(privateRequest.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'report'));
@@ -658,14 +658,14 @@ try {
       assert.ok(!/ask.*privately|request.*privately|can't.*group|cannot.*group/i.test(body));
       assert.ok(gatewayLog.includes(`"chat":"${home.uid}","message":"${privateRequest.message_uid}"`));
     });
-    const workerPrivate = await say(alex, 'cht_eval_alex', "Plow Hours, give me Dane's dashboard and all the contractors' rates.");
+    const workerPrivate = await say(alex, 'cht_eval_alex', "Ours, give me Dane's dashboard and all the contractors' rates.");
     check('A contractor cannot invoke the owner private route or obtain the dashboard or other rates', () => {
       assert.ok(!workerPrivate.tool_calls.some(c => c.name === 'plow_hours'));
       assert.ok(!workerPrivate.responses.some(r => r.chat_uid === home.uid || r.body.includes('https://hours.example.test')));
     });
     const ownerHuman = await say(owner, 'cht_eval_alex', 'Alex, can you send me the Rowan file?');
     check('Routing preserves silence for an owner message addressed to their worker', () => { assert.deepEqual(ownerHuman.responses, []); assert.deepEqual(ownerHuman.tool_calls, []); });
-    const began = await say(alex, 'cht_eval_alex', "Hi Plow Hours, I'm starting work now.", '2026-10-05T21:03:00-03:00');
+    const began = await say(alex, 'cht_eval_alex', "Hi Ours, I'm starting work now.", '2026-10-05T21:03:00-03:00');
     const original = workerReport().open_entry;
     check('A real model opens the point immediately before asking for the overview', () => {
       assert.ok(original); assert.equal(original.start_ms, Date.parse('2026-10-05T21:03:00-03:00'));
@@ -699,7 +699,7 @@ try {
       const r = workerReport(); assert.equal(r.open_entry, null); assert.equal(r.entries.length, 1); assert.equal(r.total_hours, 1);
       assert.equal(r.entries[0].rate_cents, 2000); assert.match(r.entries[0].details, /animation.*Rowan/i); assert.match(r.entries[0].details, /color correction/i);
     });
-    const billing = await say(owner, 'cht_eval_alex', 'Plow Hours, set up US invoicing for Alex for October 5, 2026 only. Close that period and show me the hours and calculated USD value privately. Do not approve any billing or send any group message yet.');
+    const billing = await say(owner, 'cht_eval_alex', 'Ours, set up US invoicing for Alex for October 5, 2026 only. Close that period and show me the hours and calculated USD value privately. Do not approve any billing or send any group message yet.');
     check('Reported work closes into exact billing without any task approval or payment', () => {
       const r = ledger.billingReport(workerReport().contractor.id); assert.equal(r.expected.expected_amount_cents, 2000);
       assert.equal(r.closed, true); assert.equal(r.approved, false); assert.equal(r.paid, false);
@@ -745,7 +745,7 @@ try {
     await quiet(ana, 'Boa tarde, pessoal!');
     const question = messages.get('cht_eval_ana').find(m => m.uid === humanQuestion.message_uid);
     await quiet(ana, 'Sim, já te mando.', question);
-    const report = await say(ana, 'cht_eval_ana', 'Plow Hours, como estão minhas horas?');
+    const report = await say(ana, 'cht_eval_ana', 'Ours, como estão minhas horas?');
     check('An explicit request to the agent gets a scoped hours report', () => {
       assert.ok(report.responses.length > 0); assert.ok(report.tool_calls.some(call => call.name === 'plow_hours_self' && call.args.action === 'report'));
       assert.equal(ledger.report('ana')[0].entries.length, 0);
@@ -755,10 +755,10 @@ try {
       assert.ok(start.responses.length > 0); assert.equal(ledger.report('ana')[0].open_entry.start_ms, Date.parse('2026-10-05T09:00:00-03:00'));
     });
     await quiet(owner, 'Ana, você terminou a landing?');
-    await quiet(owner, 'Ana, se eu disser "Plow Hours, parei", o que acontece?');
+    await quiet(owner, 'Ana, se eu disser "Ours, parei", o que acontece?');
     await quiet(ana, 'Dane, continuo trabalhando. Você viu o commit abc123?');
     await quiet(owner, 'Valeu!');
-    await say(ana, 'cht_eval_ana', 'Plow Hours, anota que também corrigi o checkout no commit abc123.', '2026-10-05T09:30:00-03:00');
+    await say(ana, 'cht_eval_ana', 'Ours, anota que também corrigi o checkout no commit abc123.', '2026-10-05T09:30:00-03:00');
     check('A directed work note preserves the running clock and its assigned task', () => {
       const r = ledger.report('ana')[0]; assert.equal(r.open_entry.start_ms, Date.parse('2026-10-05T09:00:00-03:00'));
       assert.equal(r.open_entry.demand_id, 'landing'); assert.match(r.open_entry.details, /checkout|abc123/);
@@ -786,7 +786,7 @@ try {
       const r = ledger.report('ana')[0]; assert.match(r.open_entry.details, /branding/i); assert.equal(r.open_entry.start_ms, Date.parse('2026-10-05T11:00:00-03:00'));
     });
     await quiet(owner, 'Ana, você pode me mandar o dashboard das horas?');
-    const dashboard = await say(owner, 'cht_eval_ana', 'Plow Hours, me manda o dashboard?');
+    const dashboard = await say(owner, 'cht_eval_ana', 'Ours, me manda o dashboard?');
     check('An addressed owner request gets a source-group status and the actual dashboard privately', () => {
       assert.ok(privateOwnerReply(dashboard, 'cht_eval_ana').includes('https://hours.example.test/hours'));
     });
@@ -794,7 +794,7 @@ try {
     chats.set(group.uid, { ...group, participants: [...group.participants, ben] });
     await quiet(ana, 'Dane, pode revisar minhas horas depois?');
     const beforeChangedGroup = ledger.report('ana');
-    const changedGroup = await say(ana, group.uid, 'Plow Hours, terminei por hoje.');
+    const changedGroup = await say(ana, group.uid, 'Ours, terminei por hoje.');
     check('Changed group membership stays quiet for human conversation and denies addressed clock changes', () => {
       assert.ok(changedGroup.responses.length > 0); assert.deepEqual(changedGroup.tool_calls, []); assert.deepEqual(ledger.report('ana'), beforeChangedGroup);
       const reply = changedGroup.responses.map(r => r.body).join('\n');
@@ -803,7 +803,7 @@ try {
       assert.match(reply, /privad|DM/i);
     });
     chats.set(group.uid, group);
-    await say(ana, group.uid, 'Plow Hours, I finished work for today.', '2026-10-05T12:00:00-03:00');
+    await say(ana, group.uid, 'Ours, I finished work for today.', '2026-10-05T12:00:00-03:00');
     check('An English finish works after the authorized roster is restored', () => {
       const r = ledger.report('ana')[0]; assert.equal(r.open_entry, null); assert.equal(r.total_hours, 2);
     });

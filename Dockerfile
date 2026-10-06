@@ -8,5 +8,5 @@ RUN cd /opt/plow && npm install --save-exact --omit=dev --omit=peer --omit=optio
 COPY AGENTS.md /opt/plow/hours-source/AGENTS.md
 RUN cat /opt/plow/hours-source/AGENTS.md >> /opt/plow/prompt/AGENTS.md
 COPY skill /opt/plow/skills/contractor-hours
-ENV PLOW_HOURS=1 PLOW_THREAD_TRUST=untrusted AGENT_ID=plow-hours AGENT_NAME="Plow Hours" AGENT_BLURB="Contractor time tracking through iMessage, with a live timesheet linked to assigned work."
+ENV PLOW_HOURS=1 PLOW_THREAD_TRUST=untrusted AGENT_ID=plow-hours AGENT_NAME="Ours" AGENT_BLURB="Track contractor hours in iMessage. Keep the timesheet and invoice paperwork in one place."
 USER node

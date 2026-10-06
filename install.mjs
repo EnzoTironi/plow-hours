@@ -49,7 +49,7 @@ entry=replaceOnce(entry,route,route+`\n  const confirmation = clockHours({ accou
   if (confirmation !== undefined) {
     ingress.onSubmitted();
     await durableSend(cfg, route, account.accountId, chat.uid, chat.uid, confirmation, kind);
-    void flushHoursNotices(account).catch(() => log("Plow Hours owner alert is pending; delivery will retry."));
+    void flushHoursNotices(account).catch(() => log("Ours owner alert is pending; delivery will retry."));
     return "completed";
   }`);
 const bodyAnchor='  const body = message.body ||';
@@ -141,8 +141,8 @@ await writeFile(plugin+'/index.ts',entry);
 
 let transport=await readFile(plugin+'/transport.ts','utf8');
 transport='import { hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+transport;
-transport=replaceOnce(transport,'      const listing = await request<Page<Chat>>(account, "/chats");','      await flushHoursNotices(account).catch(() => log("Plow Hours owner alert is pending; delivery will retry."));\n      const listing = await request<Page<Chat>>(account, "/chats");');
-transport=replaceOnce(transport,'      heartbeat = setInterval(() => {','      heartbeat = setInterval(() => {\n        void flushHoursNotices(account).catch(() => log("Plow Hours owner alert is pending; delivery will retry."));');
+transport=replaceOnce(transport,'      const listing = await request<Page<Chat>>(account, "/chats");','      await flushHoursNotices(account).catch(() => log("Ours owner alert is pending; delivery will retry."));\n      const listing = await request<Page<Chat>>(account, "/chats");');
+transport=replaceOnce(transport,'      heartbeat = setInterval(() => {','      heartbeat = setInterval(() => {\n        void flushHoursNotices(account).catch(() => log("Ours owner alert is pending; delivery will retry."));');
 const dispatch='  const dispatchTurn = async ({ chat, message }: Queued, onSubmitted: () => void) => {';
 transport=replaceOnce(transport,dispatch,dispatch+`\n    const hoursTurn = hoursEnabled() && account.accountId === "chat" && !!hoursLedger().groupContractor(chat.uid);`);
 transport=replaceOnce(transport,'onAdopted: () => acknowledge("adoption")','onAdopted: () => hoursTurn ? Promise.resolve() : acknowledge("adoption")');
@@ -180,7 +180,7 @@ config='import { HoursLedger } from "../plugin/hours.ts";\n'+config;
 config=replaceOnce(config,'export type Identity = {','export type Identity = {\n  owner_uid?: string;');
 config=replaceOnce(config,'  const name = identity.agent?.name;', `  const ownerUids = identity.owner_uid ? [identity.owner_uid] : [];
   if (process.env.PLOW_HOURS === "1") {
-    if (!ownerUids[0]?.trim()) throw new Error("Plow Hours needs an authenticated account owner identity.");
+    if (!ownerUids[0]?.trim()) throw new Error("Ours needs an authenticated account owner identity.");
     const ledger = new HoursLedger(join(process.env.OPENCLAW_STATE_DIR ?? "/var/lib/plow", "plow-hours"));
     try { ledger.bindInstallation(identity.line.uid, ownerUids[0]); } finally { ledger.close(); }
   }

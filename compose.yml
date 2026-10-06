@@ -1,13 +1,13 @@
 services:
   agent:
     build: .
-    image: ghcr.io/enzotironi/plow-hours:v5.6.8
+    image: ghcr.io/enzotironi/plow-hours:v5.7.0
     env_file: ./plow-credentials
     environment:
       AGENT_ID: plow-hours
-      AGENT_NAME: Plow Hours
+      AGENT_NAME: Ours
       PLOW_HOURS_LOCAL: "1"
-      AGENT_BLURB: Contractor time tracking through iMessage, with a live timesheet linked to assigned work.
+      AGENT_BLURB: Track contractor hours in iMessage. Keep the timesheet and invoice paperwork in one place.
     ports:
       - "127.0.0.1:3331:3001"
     volumes:

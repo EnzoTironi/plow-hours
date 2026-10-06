@@ -11,10 +11,10 @@ await mkdir('/var/lib/plow/workspace',{recursive:true});
 await syncConfig(renderConfig(probeIdentity,'http://127.0.0.1:1'),'/var/lib/plow/openclaw.json','/etc/plow/openclaw');
 const child=await startGateway(true);
 let success=false;
-const deadline=setTimeout(()=>{console.error('Plow Hours probe timed out');process.kill(process.pid,'SIGTERM');},120000);
+const deadline=setTimeout(()=>{console.error('Ours probe timed out');process.kill(process.pid,'SIGTERM');},120000);
 let log='';
 let checking=false;
-const paths=['/','/hours','/hours/data','/hours/app.js','/hours/style.css','/hours/plow-logo.svg','/hours/fonts/dm-sans-latin.woff2','/hours/fonts/dm-mono-400-latin.woff2','/hours/fonts/epilogue-latin-500-normal.woff2'];
+const paths=['/','/hours','/hours/data','/hours/app.js','/hours/style.css','/hours/ours-logo.svg','/hours/fonts/dm-sans-latin.woff2','/hours/fonts/dm-mono-400-latin.woff2','/hours/fonts/epilogue-latin-500-normal.woff2'];
 async function check() {
   const base='http://127.0.0.1:3000';
   for (const path of paths) {
@@ -27,7 +27,7 @@ async function check() {
       const response=await fetch(base+path,{headers,signal:AbortSignal.timeout(5000)});
       if (response.status!==200) throw new Error('Owner access: '+path+' '+response.status);
       if (path==='/hours/data'&&!Array.isArray((await response.json()).contractors)) throw new Error('Missing timesheet data');
-      if (path==='/'&&!(await response.text()).includes('<title>Plow Hours')) throw new Error('Default dashboard is not the hours panel');
+      if (path==='/'&&!(await response.text()).includes('<title>Ours')) throw new Error('Default dashboard is not the hours panel');
     }
     const control=await fetch(base+'/openclaw/',{headers,signal:AbortSignal.timeout(5000)});
     if (control.status!==200 || !(await control.text()).includes('OpenClaw')) throw new Error('Control UI moved incorrectly');

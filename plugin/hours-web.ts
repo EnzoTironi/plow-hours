@@ -67,7 +67,7 @@ export function createHoursWebHandler(getLedger: () => HoursLedger) {
     ["/hours", { type: "text/html; charset=utf-8", body: readFileSync(new URL("./hours-web/index.html", import.meta.url)) }],
     ["/hours/app.js", { type: "text/javascript; charset=utf-8", body: readFileSync(new URL("./hours-web/app.js", import.meta.url)) }],
     ["/hours/style.css", { type: "text/css; charset=utf-8", body: readFileSync(new URL("./hours-web/style.css", import.meta.url)) }],
-    ["/hours/plow-logo.svg", { type: "image/svg+xml", body: readFileSync(new URL("./hours-web/plow-logo.svg", import.meta.url)) }],
+    ["/hours/ours-logo.svg", { type: "image/svg+xml", body: readFileSync(new URL("./hours-web/ours-logo.svg", import.meta.url)) }],
     ["/hours/fonts/dm-sans-latin.woff2", { type: "font/woff2", body: readFileSync(new URL("./hours-web/fonts/dm-sans-latin.woff2", import.meta.url)) }],
     ["/hours/fonts/dm-mono-400-latin.woff2", { type: "font/woff2", body: readFileSync(new URL("./hours-web/fonts/dm-mono-400-latin.woff2", import.meta.url)) }],
     ["/hours/fonts/epilogue-latin-500-normal.woff2", { type: "font/woff2", body: readFileSync(new URL("./hours-web/fonts/epilogue-latin-500-normal.woff2", import.meta.url)) }],

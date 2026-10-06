@@ -29,7 +29,7 @@ jobs:
           node-version: '26'
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Build pinned base with Plow Hours
+      - name: Build pinned base with Ours
         run: docker build --build-arg PLOW_HOURS_REVISION="$GITHUB_SHA" -t ghcr.io/enzotironi/plow-hours:check .
       - name: Typecheck and test the installed plugin
         run: |

@@ -8,13 +8,13 @@ import { renderConfig, syncConfig } from "../boot/config.ts";
 import { probeIdentity } from "../boot/probe-fixture.ts";
 import { identityFromApi } from "../boot/identity.ts";
 
-test("CEO spec: the installed OpenClaw variant exposes Plow Hours, its owner tool and its operating skill", () => {
+test("CEO spec: the installed OpenClaw variant exposes Ours, its owner tool and its operating skill", () => {
   const cfg = renderConfig(probeIdentity, "http://127.0.0.1:1");
-  assert.equal(cfg.agents.entries.main.identity.name, "Plow Hours");
+  assert.equal(cfg.agents.entries.main.identity.name, "Ours");
   assert.ok(cfg.tools.alsoAllow.includes("plow_hours"));
   assert.equal(cfg.channels.plow.threadTrust, "untrusted");
   assert.match(readFileSync("/opt/plow/skills/contractor-hours/SKILL.md", "utf8"), /Use `plow_hours` from the owner's main Plow DM/);
-  assert.match(readFileSync("/opt/plow/prompt/AGENTS.md", "utf8"), /You are Plow Hours/);
+  assert.match(readFileSync("/opt/plow/prompt/AGENTS.md", "utf8"), /You are Ours/);
 });
 
 test("boot enables ambient group silence on an existing installation without changing other surfaces", async t => {
