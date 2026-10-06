@@ -32,7 +32,7 @@ try {
   const evaluatorCases = await docker('exec', evaluator, 'node', '--input-type=module', '-e', `
     import assert from 'node:assert/strict'; import {networkInterfaces} from 'node:os';
     const ip=Object.values(networkInterfaces()).flat().find(i=>i.family==='IPv4'&&!i.internal).address;
-    const r=await fetch('http://127.0.0.1:49519/v1/agents/me');assert.equal(r.status,200);assert.equal((await r.json()).agent.name,'Plow Hours');
+    const r=await fetch('http://127.0.0.1:49519/v1/agents/me');assert.equal(r.status,200);assert.equal((await r.json()).agent.name,'Ours');
     await assert.rejects(()=>fetch('http://'+ip+':49519/v1/agents/me',{signal:AbortSignal.timeout(2000)}));
     const socket=new WebSocket('ws://127.0.0.1:49519/v1/ws');await new Promise((resolve,reject)=>{socket.addEventListener('open',resolve,{once:true});socket.addEventListener('error',reject,{once:true});});socket.close();
     const remote=new WebSocket('ws://'+ip+':49519/v1/ws');await new Promise((resolve,reject)=>{remote.addEventListener('error',resolve,{once:true});remote.addEventListener('open',()=>reject(new Error('Network WebSocket accepted')),{once:true});});remote.close();

@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none">
+  <title>Ours — an eccentric white rabbit with a Victorian pocket watch</title>
+  <g stroke="#302A28" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M142 223c-36 24-45 81-31 112l13 13 125 3c27-31 19-91-19-127z" fill="#FFFDF3"/>
+    <path d="m134 226-19 36 14 64 33 26 73-15 12-78-24-36-37 20z" fill="#494641"/>
+    <path d="m148 227 30 45 43-48-22-7-21 19-13-22z" fill="#F9F0DC"/>
+    <path d="m176 245-19-13-4 20 23 1 23 10 6-23-26 5z" fill="#BB6C48" stroke-width="3"/>
+    <circle cx="180" cy="248" r="5" fill="#D9975C" stroke-width="2"/>
+    <path d="M128 334c-25-3-44 16-42 27 3 14 57 18 75 6l5-22m67-6c12-2 29 9 34 17 11 19-47 22-67 8" fill="#FFFDF3"/>
+    <path d="M143 128C121 103 109 68 102 39c-3-14 2-22 10-19 26 9 47 63 52 101z" fill="#FFFDF3"/>
+    <path d="M131 105c-7-16-15-42-17-56 15 13 27 40 33 58" fill="#DFB7A4" stroke="none"/>
+    <path d="M188 124c-4-30 6-65 21-85 16-21 44-16 44-1-1 20-22 28-29 15-10 25-13 46-13 69z" fill="#FFFDF3"/>
+    <path d="M196 108c0-24 6-42 17-53l12-4c-13 21-15 41-14 58" fill="#DFB7A4" stroke="none"/>
+    <path d="m118 144 9-13-9-4 20-7c14-15 39-15 55-3l18-6-4 13c22 5 37 28 34 45l16 11-13 2c5 26-15 49-40 49-25 19-54 11-64-5-23-1-41-24-35-42l-8-10 14-3z" fill="#FFFDF3"/>
+    <path d="m135 138 13-9m40 5 20 1" stroke-width="5"/>
+    <ellipse cx="153" cy="159" rx="14" ry="20" fill="#FFFFFF" stroke-width="3.5" transform="rotate(-14 153 159)"/>
+    <ellipse cx="193" cy="160" rx="16" ry="22" fill="#FFFFFF" stroke-width="3.5" transform="rotate(12 193 160)"/>
+    <ellipse cx="157" cy="164" rx="5" ry="9" fill="#302A28" stroke="none"/>
+    <ellipse cx="188" cy="155" rx="5" ry="9" fill="#302A28" stroke="none"/>
+    <path d="m167 183 19-2-9 12z" fill="#BB775D" stroke-width="2"/>
+    <path d="m177 192 3 8c12 12 29 2 34-4-6 25-28 30-38 12" fill="#302A28" stroke-width="3"/>
+    <path d="m184 204 9-1 1 10-9 1z" fill="#FFFDF3" stroke="none"/>
+    <path d="m128 184-25-8m26 17-32 2m36 7-22 9m103-26 30-6m-29 15 30 5" stroke="#8E8172" stroke-width="2.5"/>
+    <path d="m144 121 4-7m62 4 7-8m-91 93-7 3" stroke="#CEC1AF" stroke-width="2"/>
+    <path d="M262 276c26 13 45 52 22 63-14 7-30-11-26-21 8-17 24-5 22 3" stroke="#A17838" stroke-width="6"/>
+    <path d="M262 276c26 13 45 52 22 63-14 7-30-11-26-21 8-17 24-5 22 3" stroke="#E0BA65" stroke-width="2.5"/>
+    <path d="M185 242c-6-24 7-29 16-25 10 4 7 17 1 24" stroke="#A77A35" stroke-width="6"/>
+    <path d="m185 243-2-12 25-2 1 13" fill="#D6A34C" stroke="#A77A35" stroke-width="3"/>
+    <path d="m187 232 1 7m6-8 1 7m6-7 1 7" stroke="#8B632C" stroke-width="2"/>
+    <circle cx="194" cy="302" r="69" fill="#D4A14A"/>
+    <circle cx="194" cy="302" r="61" stroke="#F3D591" stroke-width="3"/>
+    <circle cx="194" cy="302" r="54" fill="#FFF5DA" stroke="#A77A35" stroke-width="3"/>
+    <g fill="#49352A" stroke="none" font-family="Georgia,serif" font-weight="bold" text-anchor="middle" font-size="14">
+      <text x="194" y="264">XII</text><text x="235" y="308">III</text>
+      <text x="194" y="347">VI</text><text x="153" y="308">IX</text>
+    </g>
+    <g stroke="#8F6B38" stroke-width="2">
+      <path d="m216 263-3 5m21 12-5 3m5 39-5-3m-13 22-3-5m-41 5 3-5m-22-13 5-3m-5-40 5 3m13-22 3 5"/>
+    </g>
+    <path d="m194 302-14-18-5 2-1-7-7-5m27 28 20-22 5-2 3-7-8 1-1 6z" fill="#49352A" stroke="#49352A" stroke-width="2.5"/>
+    <path d="m190 306-11 13" stroke="#A2773E" stroke-width="2"/>
+    <circle cx="194" cy="302" r="4" fill="#49352A" stroke="none"/>
+    <path d="M123 271c-16-7-28 3-26 16 2 14 15 28 26 29 13 2 20-6 15-12l-13-7c11 3 18-3 12-10l-11-6c7-1 7-7-3-10z" fill="#FFFDF3"/>
+    <path d="M256 265c18-7 28 9 22 21-7 17-18 26-29 24-12-2-12-11-3-15l10-6c-12 3-18-3-12-10l10-5c-6 0-7-6 2-9z" fill="#FFFDF3"/>
+    <path d="m111 281 10 5m-15 5 9 7m144-20 5 4" stroke="#D6C9B7" stroke-width="2"/>
+  </g>
+</svg>

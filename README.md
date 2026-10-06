@@ -1,13 +1,15 @@
-# Plow Hours
+# Ours
+
+<img src="plugin/hours-web/ours-logo.svg" width="112" alt="Ours: a white rabbit holding a pocket watch" />
 
 Track contractor hours in the iMessage conversations you already have.
 
-Each contractor gets a group with you and Plow Hours. They tell the agent when
+Each contractor gets a group with you and Ours. They tell the agent when
 they start, take a break, switch tasks or finish. You get a private view of the
 team's hours, the work behind them and the paperwork needed before payday.
 
-[Set up Plow Hours](https://aiworthusing.com/agent-index/plow-hours) ·
-[Watch it work](https://youtu.be/hNcJ6omYnWU) ·
+[Set up Ours](https://aiworthusing.com/agent-index/plow-hours) ·
+[Watch it work](https://youtu.be/TLfrcTrz52c) ·
 [Latest release](https://github.com/EnzoTironi/plow-hours/releases/latest)
 
 **Payments stay manual.** The agent collects documents, checks invoice amounts
@@ -37,7 +39,7 @@ Alex records work in that group:
 | “Also fixed checkout validation. Commit abc123.” | Adds a note, keeping the current task and clock open. |
 | “Now I'm working on checkout.” | Adds an update to the same open session. |
 | “Finished for today.” | Closes the current session and adds its time to recorded hours. |
-| “Plow Hours, how many hours have I logged?” | Reports Alex's own recorded work. |
+| “Ours, how many hours have I logged?” | Reports Alex's own recorded work. |
 
 Nobody needs to learn task IDs or a command syntax. Starting work opens the
 clock immediately. The description can arrive later without moving its start.
@@ -172,7 +174,7 @@ the instructions again before paying manually, even if the URL stayed the same.
 
 ## How the agent works
 
-Plow Hours builds on [Plow OpenClaw](https://github.com/plow-pbc/plow-openclaw-agent).
+Ours builds on [Plow OpenClaw](https://github.com/plow-pbc/plow-openclaw-agent).
 Plow provides the iMessage line and message transport. The model interprets the
 conversation and selects a tool; the tools enforce access and save the records.
 
@@ -217,7 +219,7 @@ already sent. Use private documents from the start.
 
 ## Install
 
-For a hosted installation, open [Plow Hours on the Agent Index](https://aiworthusing.com/agent-index/plow-hours)
+For a hosted installation, open [Ours on the Agent Index](https://aiworthusing.com/agent-index/plow-hours)
 and use its setup flow. Once it is running, text your agent's line and start with
 the first contractor. Ask for the dashboard in your private conversation.
 

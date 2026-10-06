@@ -10,7 +10,7 @@ const self = { type: "agent" as const, relationship: "self", line: { uid: "ln_p4
 const group = { uid: "cht_plucas", status: "active", trusted: false, participants: [owner, contractor, self] };
 const message = (body: string, reply_to?: object) => ({ uid: "m", direction: "inbound", body, sender: owner,
   created_at: "2026-10-05T22:16:05-07:00", attachments: [], ...(reply_to ? { reply_to } : {}) }) as Parameters<typeof ownerAddressesAgent>[1];
-const names = ["Plow Hours"];
+const names = ["Ours"];
 
 test("a link or a request to the contractor is not for the agent", () => {
   assert.equal(ownerAddressesAgent(group, message("http://aiworthusing.com/agent-index/thefoundertimes"), names), false);
@@ -19,7 +19,7 @@ test("a link or a request to the contractor is not for the agent", () => {
 });
 
 test("naming the agent or its line, as a whole word, addresses it", () => {
-  assert.equal(ownerAddressesAgent(group, message("Plow Hours, what are Plucas's hours today?"), names), true);
+  assert.equal(ownerAddressesAgent(group, message("Ours, what are Plucas's hours today?"), names), true);
   assert.equal(ownerAddressesAgent(group, message("elm: explain the timesheet to Plucas"), names), true);
   assert.equal(ownerAddressesAgent(group, message("take the helm on this, Plucas"), names), false);
 });

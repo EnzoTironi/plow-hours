@@ -27,7 +27,7 @@ test("private routing binds the actual group owner to their live DM, rejecting w
     if (url.endsWith("/v1/chats")) return Response.json({ data: [privateChat, current], has_more: false });
     assert.fail("Unexpected provider request: " + url);
   });
-  const message = { uid: "owner-group-request", sender: owner, direction: "inbound", body: "Plow Hours, send me the dashboard.", created_at: "2026-10-05T21:00:00Z", attachments: [] };
+  const message = { uid: "owner-group-request", sender: owner, direction: "inbound", body: "Ours, send me the dashboard.", created_at: "2026-10-05T21:00:00Z", attachments: [] };
   const destination = await ownerPrivateConversation(account, group, message);
   assert.equal(destination.chat.uid, home.uid); assert.deepEqual(destination.sender, owner);
   await assert.rejects(() => ownerPrivateConversation(account, group, { ...message, sender: worker }), /verified owner/);
