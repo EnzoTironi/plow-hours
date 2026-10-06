@@ -101,16 +101,14 @@ test("an owner group turn keeps the original people and conversation facts while
   assert.equal(seen.conversation.label, source.display_name);
   assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.message_origin, { kind: "group", chat_uid: source.uid });
   assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.final_reply_destination, { kind: "direct", chat_uid: destination.uid });
-  assert.ok(seen.message.rawBody.includes(source.uid));
-  assert.match(seen.message.rawBody, /Message origin:.*"kind":"group"/);
-  assert.ok(seen.message.rawBody.endsWith("Alder, pode pedir para o Pueblo registrar o trabalho a partir de agora por aqui?"));
+  assert.equal(seen.message.rawBody, "Alder, pode pedir para o Pueblo registrar o trabalho a partir de agora por aqui?");
   assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.participants.map(p => p.name), ["Enzo", "Pueblo", "Alder"]);
-  assert.equal(seen.route.sessionKey, "agent:main:main");
+  assert.equal(seen.route.sessionKey, `agent:main:plow:owner-group:${source.uid}`);
   assert.equal(seen.conversation.nativeChannelId, destination.uid);
   assert.equal(seen.reply.to, `plow:${destination.uid}`); assert.equal(seen.reply.nativeChannelId, destination.uid);
 });
 
-function ownerTools(senderIsOwner = true) {
+function ownerTools(senderIsOwner = true, overrides: object = {}) {
   const tools = new Map<string, Tool>();
   const cfg = {
     channels: { plow: { apiBase: "http://fixture", accountId: "chat", lineUid: "line", threadTrust: "untrusted" } },
@@ -120,7 +118,7 @@ function ownerTools(senderIsOwner = true) {
     runtime: { channel: { routing: { resolveAgentRoute }, session: { resolveStorePath, updateLastRoute } } },
     registerTool(factory: (context: object) => Tool) {
       const tool = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat",
-        nativeChannelId: home.uid, requesterSenderId: "plow-owner", senderIsOwner });
+        nativeChannelId: home.uid, requesterSenderId: "plow-owner", senderIsOwner, ...overrides });
       tools.set(tool.name, tool);
     },
   });
@@ -294,4 +292,27 @@ test("correcting a contact preserves earlier hours under the original sender and
   assert.deepEqual(hoursLedger().report("alex-old")[0].entries, earlier);
   assert.deepEqual(hoursLedger().report("alex")[0].entries, []);
   assert.equal(hoursLedger().report("alex")[0].contractor.handle, worker.provider_key);
+});
+
+
+test("isolated owner group sessions retain authorization only with the bound source and live matching owner", async t => {
+  await websocketFixture(t);
+  let current = group;
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith(home.uid)) return Response.json(home);
+    if (url.endsWith(group.uid)) return Response.json(current);
+    if (url.endsWith("/v1/chats")) return Response.json({ data: [home, current], has_more: false });
+    if (url.endsWith("/agents/me")) return Response.json({ line: { uid: "line" }, agent: { web_url: "https://hours.example.test" } });
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const context = { sessionKey: "agent:main:plow:owner-group:" + group.uid,
+    toolBindings: { plowHoursOwner: { line_uid: "line", chat_uid: group.uid, handle: owner.provider_key,
+      message_uid: "owner-dashboard", created_at: "2026-10-06T12:00:00Z", body: "Send my dashboard" } } };
+  const tools = ownerTools(true, context);
+  const receipt = await tools("plow_hours").execute("dashboard", { action: "dashboard" });
+  assert.ok(receipt);
+  await assert.rejects(() => ownerTools(true, { ...context, toolBindings: {} })("plow_hours").execute("missing-source", { action: "dashboard" }), /owner's main Plow DM/);
+  await assert.rejects(() => ownerTools(true, { ...context, sessionKey: "agent:main:plow:owner-group:another" })("plow_hours").execute("wrong-group", { action: "dashboard" }), /owner's main Plow DM/);
+  current = { ...group, participants: [self, worker, { ...owner, role: "member" }] };
+  await assert.rejects(() => tools("plow_hours").execute("revoked", { action: "dashboard" }), /group owner/);
 });
