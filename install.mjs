@@ -31,11 +31,16 @@ entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(a
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
-entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
+entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerAddressesAgent, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
 entry=replaceOnce(entry,'ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {','ingress: TurnIngress, log: (text: string) => void, ownerGroup?: Chat): Promise<TurnOutcome> {');
 const kindLine='  const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";';
 const inboundKind = kindLine+'\n  const peer = { kind, id:';
 entry=replaceOnce(entry,inboundKind,kindLine+`\n  if (hoursEnabled() && account.accountId === "chat" && senderIsOwner && kind === "group") {
+    if (!ownerAddressesAgent(chat, message, [process.env.AGENT_NAME, ...Object.values(cfg.agents?.entries ?? {}).map(agent => agent?.identity?.name)])) {
+      ingress.onSubmitted();
+      log(\`completed chat=\${chat.uid} owner group message not addressed to the agent: no turn\`);
+      return "completed";
+    }
     const destination = await ownerPrivateConversation(account, chat, message);
     return receive(account, cfg, destination.chat, { ...message, sender: destination.sender }, firstContact, history, ingress, log, chat);
   }\n  const peer = { kind, id:`);

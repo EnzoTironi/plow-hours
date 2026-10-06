@@ -56,12 +56,14 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
       const account = { apiBase, accountId: "chat", lineUid: "line", threadTrust: "untrusted" };
       const cfg = { agents: { entries: { main: { identity: { name: "Alder" } } } }, channels: { plow: account } };
       let channel: { gateway: { startAccount(value: object): Promise<void> } } | undefined;
+      let dispatched = false;
       const finalText = "Tell me here when you start or finish working.";
       entry.register({ registrationMode: "full", logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
         registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
         runtime: { channel: { routing: { resolveAgentRoute }, session: { resolveStorePath, updateLastRoute }, inbound: {
           buildContext(raw: unknown) { return { SessionKey: contextSchema.parse(raw).route.sessionKey }; },
           async dispatch({ replyOptions, delivery }: Dispatch) {
+            dispatched = true;
             await replyOptions.turnAdoptionLifecycle.onAdopted();
             assert.equal(replyOptions.disableBlockStreaming, true);
             const intermediate: { payload: ReplyPayload; kind: ReplyDispatchRuntimeInfo["kind"] }[] = [
@@ -94,7 +96,9 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
       assert.ok(channel);
       const controller = abortAfter(10000);
       const logs: string[] = [];
-      const completed = route === "owner-dm" ? `completed chat=${source.uid}` : "stage=terminal";
+      // An owner group message that neither names the agent nor replies to it ends before any model turn (#19).
+      const gated = route === "owner-group" && silent;
+      const completed = route === "owner-dm" || gated ? `completed chat=${source.uid}` : "stage=terminal";
       await channel.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(value: string) {
         logs.push(value); if (value.includes(completed)) controller.abort();
       } } });
@@ -102,6 +106,7 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
       const destination = route === "contractor-group" ? group : home;
       assert.deepEqual(posts, silent ? [] : [{ path: `/v1/chats/${destination.uid}/messages`, body: finalText }]);
       assert.equal(hoursLedger().report("daniel")[0]?.entries.length, 0);
+      assert.equal(dispatched, !gated);
     });
   }
 }
