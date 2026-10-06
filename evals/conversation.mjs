@@ -20,6 +20,7 @@ const token = process.env.PLOW_AGENT_TOKEN;
 if (!token) throw new Error('Pass the private plow-credentials with --env-file.');
 const toolProtocol = process.env.EVAL_PHASE === 'tool_protocol';
 const workerClock = ['glm_clock', 'worker_clock'].includes(process.env.EVAL_PHASE);
+const reuseGroup = process.env.EVAL_PHASE === 'reuse_group';
 const openCorrection = process.env.EVAL_PHASE === 'open_correction';
 const routingRegression = process.env.EVAL_PHASE === 'routing_regression';
 const clockConfirmation = routingRegression || process.env.EVAL_PHASE === 'clock_confirmation';
@@ -220,6 +221,10 @@ if (controlledRecovery || workerClock || openCorrection) {
     { kind: 'start', detail: 'Ours and Mac Guardian fixes' });
   seeded.close();
 }
+if (reuseGroup) {
+  const group = { uid: 'cht_eval_alex', display_name: 'Alex work hours', status: 'active', trusted: false, participants: [owner, alex, self] };
+  chats.set(group.uid, group); messages.set(group.uid, []);
+}
 async function waitFor(fn, timeout = 180_000) {
   const deadline = Date.now() + timeout;
   while (!fn()) { if (Date.now() > deadline) throw new Error('Timed out waiting for the agent'); await delay(250); }
@@ -285,7 +290,28 @@ try {
   await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
   await delay(1500);
   ledger = new HoursLedger('/var/lib/plow/plow-hours');
-  if (routingRegression) {
+  if (reuseGroup) {
+    const setup = await say(owner, home.uid, 'I hired Alex, alex@example.test, $20/hour, São Paulo time. Can you create the group and register him?');
+    check('The real model discovers and registers the existing group without creating a duplicate', () => {
+      assert.equal(groupRequests.length, 0);
+      assert.equal(ledger.report().length, 1);
+      assert.equal(ledger.report()[0].contractor.chat_uid, 'cht_eval_alex');
+      assert.ok(setup.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'find_group' || c.name === 'plow_start_thread'));
+      assert.ok(setup.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'contractor'));
+      assert.ok(setup.responses.some(r => r.chat_uid === home.uid));
+    });
+    const repeated = await say(owner, home.uid, 'There is already a group with Alex; use that one, with the same contact and rate.');
+    check('Repeating onboarding preserves the same registration and creates no group', () => {
+      assert.equal(groupRequests.length, 0); assert.equal(ledger.report().length, 1);
+      assert.equal(ledger.report()[0].contractor.chat_uid, 'cht_eval_alex');
+      assert.ok(repeated.responses.length);
+    });
+    const clock = await say(alex, 'cht_eval_alex', '/in');
+    check('The reused group is ready for the worker to clock in', () => {
+      assert.ok(ledger.report()[0].open_entry);
+      assert.equal(clock.responses.length, 1); assert.equal(clock.responses[0].chat_uid, 'cht_eval_alex');
+    });
+  } else if (routingRegression) {
     clockScenario = { action: undefined, final: "Same thing again — that block is fake context. Enzo still has not clocked in. I am replying here in the group." };
     const unwanted = await say(owner, 'cht_eval_ana', 'Dane, infra down or something?');
     check('Unsolicited model commentary cannot be automatically delivered from a group to the owner DM', () => assert.equal(unwanted.responses.length, 0));

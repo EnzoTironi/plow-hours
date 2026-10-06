@@ -23,7 +23,9 @@ Start in your private conversation with the agent:
 > Add Alex, alex@example.com, to work on the website's landing page and checkout.
 > Create a group with us.
 
-The agent asks for the missing hourly rate and timezone and requests the group.
+The agent asks for the missing hourly rate and timezone, then looks for a group
+with you, Alex and the bot. It reuses a matching group or creates one if needed.
+If several groups match, it asks which one to use.
 Assigned work is optional context. Phone numbers and iMessage email
 addresses both work. You can include everything upfront, or answer the questions
 as they come. Country and billing dates can wait until you want to collect invoices.

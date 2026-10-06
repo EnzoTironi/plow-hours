@@ -5,7 +5,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import entry from "../plugin/index.ts";
 import { hoursLedger } from "../plugin/hours.ts";
-import { ownerPrivateConversation } from "../plugin/hours-channel.ts";
+import { findContractorGroups, ownerPrivateConversation } from "../plugin/hours-channel.ts";
 import { DeliveryUnknownError, HttpError } from "../plugin/transport.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
@@ -133,6 +133,7 @@ test("accepted group requests and saved rosters do not claim iMessage availabili
   const requests: unknown[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
     if (url.endsWith("/v1/chats")) {
+      if (init.method === "GET") return Response.json({ data: [home], has_more: false });
       assert.equal(init.method, "POST"); requests.push(JSON.parse(String(init.body)));
       return Response.json({ uid: group.uid });
     }
@@ -158,8 +159,9 @@ test("rejections, transport failures and malformed accepted responses produce no
   await websocketFixture(t);
   let groupPosts = 0;
   let response: () => Response = () => Response.json({ uid: group.uid });
-  t.mock.method(globalThis, "fetch", async (url: string) => {
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
     if (url.endsWith(home.uid)) return Response.json(home);
+    if (init.method === "GET" && url.endsWith("/v1/chats")) return Response.json({ data: [home], has_more: false });
     assert.ok(url.endsWith("/v1/chats")); groupPosts++;
     return response();
   });
@@ -315,4 +317,86 @@ test("isolated owner group sessions retain authorization only with the bound sou
   await assert.rejects(() => ownerTools(true, { ...context, sessionKey: "agent:main:plow:owner-group:another" })("plow_hours").execute("wrong-group", { action: "dashboard" }), /owner's main Plow DM/);
   current = { ...group, participants: [self, worker, { ...owner, role: "member" }] };
   await assert.rejects(() => tools("plow_hours").execute("revoked", { action: "dashboard" }), /group owner/);
+});
+
+
+test("existing contractor group is discovered and reused without creation or introduction", async t => {
+  await websocketFixture(t);
+  let posts = 0;
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    if (init.method === "POST") { posts++; assert.fail("Reusing a group must not send or create"); }
+    if (url.endsWith(home.uid)) return Response.json(home);
+    if (url.endsWith(group.uid)) return Response.json(group);
+    if (url.endsWith("/v1/chats")) return Response.json({ data: [home, group], has_more: false });
+    assert.fail("Unexpected request " + url);
+  });
+  const tools = ownerTools();
+  const found = z.object({ details: z.object({ status: z.literal("found"), groups: z.array(z.object({ chat_uid: z.literal(group.uid) })) }) }).parse(await tools("plow_hours").execute("find", { action: "find_group", handle: worker.provider_key.toUpperCase() }));
+  assert.equal(found.details.groups.length, 1);
+  const reused = z.object({ details: z.object({ chat_uid: z.literal(group.uid), reused: z.literal(true), introduction_sent: z.literal(false), request_status: z.literal("existing") }) }).parse(await tools("plow_start_thread").execute("reuse", introduction));
+  assert.ok(reused); assert.equal(posts, 0);
+});
+
+test("a creation conflict triggers a fresh lookup and reuses a newly visible group without retrying POST", async t => {
+  await websocketFixture(t);
+  let visible = false, posts = 0;
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    if (url.endsWith(home.uid)) return Response.json(home);
+    if (url.endsWith(group.uid)) return Response.json(group);
+    assert.ok(url.endsWith("/v1/chats"));
+    if (init.method === "POST") { posts++; visible = true; return Response.json({ error: "Conflict" }, { status: 409 }); }
+    return Response.json({ data: visible ? [home, group] : [home], has_more: false });
+  });
+  const receipt = z.object({ details: z.object({ chat_uid: z.literal(group.uid), reused: z.literal(true), introduction_sent: z.literal(false) }) });
+  receipt.parse(await ownerTools()("plow_start_thread").execute("race", introduction));
+  assert.equal(posts, 1);
+});
+
+test("multiple matching groups require a choice and never create another group", async t => {
+  await websocketFixture(t);
+  const other = { ...group, uid: "cht_other" };
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    assert.notEqual(init.method, "POST");
+    if (url.endsWith(home.uid)) return Response.json(home);
+    if (url.endsWith(group.uid)) return Response.json(group);
+    if (url.endsWith(other.uid)) return Response.json(other);
+    return Response.json({ data: [home, group, other], has_more: false });
+  });
+  const tools = ownerTools();
+  const result = z.object({ details: z.object({ status: z.literal("ambiguous"), groups: z.array(z.object({ chat_uid: z.string() })) }) }).parse(await tools("plow_hours").execute("find", { action: "find_group", handle: worker.provider_key }));
+  assert.equal(result.details.groups.length, 2);
+  await assert.rejects(() => tools("plow_start_thread").execute("ambiguous", introduction), /Several matching/);
+});
+
+test("group lookup rejects wrong owner, agent, contact, trust, extra members and stale roster", async t => {
+  await websocketFixture(t);
+  const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line" };
+  let rows = [group], fresh = group;
+  t.mock.method(globalThis, "fetch", async (url: string) => url.endsWith("/v1/chats") ? Response.json({ data: rows, has_more: false }) : Response.json(fresh));
+  for (const invalid of [
+    { ...group, trusted: true }, { ...group, status: "inactive" },
+    { ...group, participants: [self, { ...owner, provider_key: "+15550000999" }, worker] },
+    { ...group, participants: [{ ...self, line: { uid: "other-line" } }, owner, worker] },
+    { ...group, participants: [self, owner, { ...worker, provider_key: "other@example.test" }] },
+    { ...group, participants: [...group.participants, { ...worker, uid: "extra" }] },
+  ]) {
+    rows = [invalid]; fresh = invalid;
+    assert.equal((await findContractorGroups(account, home, worker.provider_key)).status, "not_found");
+  }
+  rows = [group]; fresh = { ...group, trusted: true };
+  assert.equal((await findContractorGroups(account, home, worker.provider_key)).status, "not_found");
+});
+
+test("incomplete or unavailable discovery never claims no existing group or starts a duplicate", async t => {
+  await websocketFixture(t);
+  let unavailable = false;
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    assert.notEqual(init.method, "POST");
+    if (url.endsWith(home.uid)) return Response.json(home);
+    return unavailable ? Response.json({}, { status: 503 }) : Response.json({ data: [home], has_more: true });
+  });
+  const tool = ownerTools()("plow_start_thread");
+  await assert.rejects(() => tool.execute("truncated", introduction), /incomplete/);
+  unavailable = true;
+  await assert.rejects(() => tool.execute("unavailable", introduction), (error: unknown) => error instanceof HttpError && error.status === 503);
 });
