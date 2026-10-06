@@ -16,7 +16,7 @@ const phonePattern = JSON.stringify('^\\+[1-9][0-9]{1,14}$');
 entry=replaceOnce(entry,membersLine,`          members: { type: "array", minItems: 1, items: { type: "string", anyOf: [{ pattern: ${phonePattern} }, { format: "email" }] }, description: "International phone numbers or iMessage email handles. The owner is included automatically." },`);
 entry=replaceOnce(entry,'Accepts phone numbers, not chat ids or email addresses.','Accepts international phone numbers or iMessage email handles, never chat IDs.');
 entry=replaceOnce(entry,'Sends the first message and returns the chat uid;', 'Requests the group and first message, returning a Plow chat uid. Acceptance does not verify iMessage availability or delivery. Report delivery as unconfirmed; never claim the recipient received it. Do not retry an uncertain send without the owner asking;');
-entry=replaceOnce(entry,'Use the known chat uid."', 'Use the known chat uid. The receipt confirms Plow accepted the request, not iMessage delivery; never claim the recipient received it without separate evidence."');
+entry=replaceOnce(entry,'Use the known chat uid."', 'Use the known chat uid. An explicit owner request to send public instructions or a message to a contractor group authorizes that send, including when requested from another chat. Keep private owner reports, dashboard links and financial information in the owner DM. The receipt confirms Plow accepted the request, not iMessage delivery; never claim the recipient received it without separate evidence."');
 entry=replaceOnce(entry,'        const chat = await requestDelivery<{ uid: string }>(account, "/chats", {','        const response = await requestDelivery<unknown>(account, "/chats", {');
 entry=replaceOnce(entry,'        api.logger.info(`plow started thread chat=${chat.uid}`);',`        const parsed = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
         if (!parsed.success) throw new DeliveryUnknownError();
@@ -79,7 +79,10 @@ entry=replaceOnce(entry,'from: kind === "group" ?', 'from: ownerGroup ? `plow:gr
 entry=replaceOnce(entry,'conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name,',
   'conversation: { kind: ownerGroup ? "group" : kind, id: ownerGroup?.uid ?? chat.uid, nativeChannelId: chat.uid, label: (ownerGroup ?? chat).display_name,');
 entry=replaceOnce(entry,'payload: { first_contact: firstContact, trusted: chat.trusted, participants,',
-  'payload: { first_contact: firstContact, trusted: (ownerGroup ?? chat).trusted, participants,');
+  'payload: { first_contact: firstContact, trusted: (ownerGroup ?? chat).trusted, participants, message_origin: { kind: ownerGroup ? "group" : kind, chat_uid: ownerGroup?.uid ?? chat.uid }, final_reply_destination: { kind, chat_uid: chat.uid },');
+entry=replaceOnce(entry,'})), rawBody: body },', `})), rawBody: ownerGroup
+      ? "[Message origin: " + JSON.stringify({ kind: "group", chat_uid: ownerGroup.uid, name: ownerGroup.display_name ?? null }) + "; default final reply destination: owner DM.]\\n" + body
+      : body },`);
 entry=replaceOnce(entry,'  const body = message.body ||', '  const body = (hoursRestricted ? workText(message.body) : message.body) ||');
 entry=replaceOnce(entry,'      body: m.body, timestamp:', '      body: hoursRestricted ? workText(m.body) : m.body, timestamp:');
 entry=replaceOnce(entry,'body: message.reply_to.body, sender:', 'body: hoursRestricted ? workText(message.reply_to.body) : message.reply_to.body, sender:');

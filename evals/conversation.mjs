@@ -20,14 +20,15 @@ const token = process.env.PLOW_AGENT_TOKEN;
 if (!token) throw new Error('Pass the private plow-credentials with --env-file.');
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
-const alderAttention = ['alder_attention', 'alder_reconciliation'].includes(process.env.EVAL_PHASE);
+const groupDelivery = process.env.EVAL_PHASE === 'alder_group_delivery';
+const alderAttention = ['alder_attention', 'alder_reconciliation', 'alder_group_delivery'].includes(process.env.EVAL_PHASE);
 const agentName = alderAttention ? 'Alder' : 'Plow Hours';
 if (alderAttention) process.env.AGENT_NAME = agentName;
 const owner = { type: 'member', uid: 'mem_eval_owner', role: 'owner', display_name: alderAttention ? 'Enzo' : 'Dane', provider_key: '+15550000001' };
 const ana = { ...owner, uid: 'mem_eval_ana', role: 'member', display_name: 'Ana', provider_key: '+15550000002' };
-const ben = { ...ana, uid: 'mem_eval_ben', display_name: 'Ben', provider_key: 'ben@example.test' };
+const ben = { ...ana, uid: 'mem_eval_ben', display_name: groupDelivery ? 'Pueblo' : 'Ben', provider_key: 'ben@example.test' };
 const alexWrong = { ...ana, uid: 'mem_eval_alex_wrong', display_name: 'Alex', provider_key: 'alex@unreachable.example.test' };
-const alex = { ...alexWrong, uid: 'mem_eval_alex', display_name: alderAttention ? 'Pueblo' : 'Alex', provider_key: alderAttention ? 'pueblo@example.test' : 'alex@example.test' };
+const alex = { ...alexWrong, uid: 'mem_eval_alex', display_name: groupDelivery ? 'Daniel' : alderAttention ? 'Pueblo' : 'Alex', provider_key: groupDelivery ? 'daniel@example.test' : alderAttention ? 'pueblo@example.test' : 'alex@example.test' };
 const self = { type: 'agent', relationship: 'self', line: { uid: 'ln_eval', display_name: agentName } };
 const home = { uid: 'cht_eval_owner', status: 'active', trusted: false, participants: [owner, self] };
 const chats = new Map([[home.uid, home]]);
@@ -184,8 +185,9 @@ async function say(who, chatUid, body, created_at = new Date().toISOString(), { 
   const started = Date.now();
   activeTurn = { chat_uid: chatUid, sender: who.display_name, message_uid: uid };
   for (const socket of sockets) socket.send(JSON.stringify({ event_type: 'message_received', event_id: uid, chat_id: chatUid, data: { message } }));
-  await waitFor(() => deliveries.slice(from).some(m => m.chat_uid === chatUid)
-    || gatewayLog.includes(`acked chat=${chatUid} message=${uid} stage=terminal`));
+  const groupTurn = chats.get(chatUid).participants.length > 2;
+  await waitFor(() => gatewayLog.includes(`acked chat=${chatUid} message=${uid} stage=terminal`)
+    || (!groupTurn && deliveries.slice(from).some(m => m.chat_uid === chatUid)));
   // Typing ends after dispatch; clock shortcuts have no typing event.
   await waitFor(() => !typing.has(chatUid));
   await delay(1500);
@@ -288,6 +290,82 @@ try {
       unconfirmed(followup); noFallback(followup);
     });
     check('The delivery conversation uses successful real model calls', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
+    });
+  } else if (groupDelivery) {
+    await say(owner, home.uid, `Cadastre Daniel, ${alex.provider_key}, USD 20 por hora, America/Sao_Paulo. Crie um grupo comigo e ele. Não há tarefa cadastrada.`);
+    const groupUid = 'cht_eval_alex';
+    const report = () => ledger.report().find(r => r.contractor.handle === alex.provider_key);
+    async function quiet(input) {
+      const before = ledger.report();
+      const turn = await say(owner, groupUid, input);
+      check('Human conversation stays silent: ' + input, () => {
+        assert.ok(turn.model_requests > 0); assert.deepEqual(turn.responses, []);
+        assert.deepEqual(turn.tool_calls, []); assert.deepEqual(ledger.report(), before);
+      });
+    }
+    function publicReply(turn, expected) {
+      assert.ok(turn.tool_calls.some(c => c.name === 'plow_reply_to' && c.args.chat_uid === groupUid));
+      const messages = turn.responses.filter(r => r.chat_uid === groupUid);
+      assert.ok(messages.length); assert.ok(messages.some(r => expected.test(r.body)));
+      assert.ok(!turn.responses.some(r => r.chat_uid === 'cht_eval_ben'));
+      assert.ok(!messages.some(r => /hours\.example\.test|\$\s*20|\$\s*35|SOC2|knightwatch|revisores humanos/i.test(r.body)));
+    }
+    await quiet('Dane, tem uma demanda nova, os clientes agora pediram que a gente seja SOC2');
+    await quiet('Dane, consegue também olhar como está a performance da equipe? Quero descobrir quem está soltando mais entregas relevantes. Queria também criar uma WIKI, a partir de todas as revisões que foram aprovadas e merendas, dando um peso diferente pra propostas do knightwatch e de revisores humanos.');
+    const guidance = await say(owner, groupUid, 'Alder, consegue instruir o dane em tudo que você pode fazer pra ajudar ele?');
+    check('Addressed public guidance is sent to Daniel in the original group without a duplicate owner DM', () => {
+      publicReply(guidance, /horas|come[cç]|ponto/i);
+      assert.ok(guidance.responses.every(r => r.chat_uid === groupUid));
+      assert.ok(!guidance.tool_calls.some(c => c.name === 'plow_hours_self'));
+      assert.equal(report().entries.length, 0);
+    });
+    const origin = await say(owner, home.uid, 'De qual chat veio meu pedido para você instruir o Dane? Foi do grupo do Daniel ou deste privado?');
+    check('A later owner DM remembers that the public request originated in the Daniel group', () => {
+      const text = origin.responses.map(r => r.body).join('\n');
+      assert.ok(origin.responses.length); assert.ok(origin.responses.every(r => r.chat_uid === home.uid));
+      assert.match(text, /grupo.{0,100}(?:Daniel|Dane)|(?:Daniel|Dane).{0,100}grupo/i);
+      assert.ok(!/veio (?:aqui|do privado)|chegou (?:aqui|no privado)|n[aã]o (?:consigo|posso).{0,50}(?:diferenciar|identificar)/i.test(text));
+    });
+    const direct = await say(owner, home.uid, 'Envie no grupo do Daniel exatamente esta mensagem: Daniel, amanhã pode continuar a animação para o Rowan e registrar seu horário por aqui.');
+    check('An explicit owner DM sends the requested message to the verified group without a cross-chat refusal', () => {
+      publicReply(direct, /Daniel, amanhã pode continuar a animação para o Rowan e registrar seu horário por aqui\.?/);
+      assert.ok(!/n[aã]o (?:encaminho|consigo enviar|posso enviar)|mande? (?:direto|voc[eê]) no grupo/i.test(direct.responses.map(r => r.body).join('\n')));
+    });
+    const began = await say(alex, groupUid, 'Comecei a animação para o Rowan agora.', '2026-10-05T08:00:00-03:00');
+    check('Public owner messaging leaves the contractor clock intact and natural clocking still works', () => {
+      assert.ok(began.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'start'));
+      assert.ok(began.responses.every(r => r.chat_uid === groupUid));
+      assert.equal(report().open_entry.start_ms, Date.parse('2026-10-05T08:00:00-03:00'));
+    });
+    await say(owner, home.uid, `Cadastre Pueblo, ${ben.provider_key}, USD 35 por hora, America/New_York. Crie um grupo comigo e ele. Não há tarefa cadastrada.`);
+    const dashboard = await say(owner, 'cht_eval_ben', 'Alder, me mande o dashboard das horas e o relatório de todos os colaboradores.');
+    check('Private owner results requested in another group remain in the owner DM', () => {
+      assert.ok(dashboard.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'dashboard'));
+      assert.ok(dashboard.responses.length); assert.ok(dashboard.responses.every(r => r.chat_uid === home.uid));
+      assert.ok(dashboard.responses.some(r => r.body.includes('https://hours.example.test/hours')));
+      assert.ok(!dashboard.tool_calls.some(c => c.name === 'plow_reply_to'));
+    });
+    const reference = await say(owner, home.uid, 'Envie no grupo do Daniel a orientação que pedi antes sobre tudo que você pode fazer para ajudar ele.');
+    check('An owner can refer to an earlier group instruction after another contractor conversation', () => {
+      publicReply(reference, /horas|come[cç]|ponto/i);
+      assert.ok(!reference.responses.some(r => r.chat_uid === groupUid && /Pueblo|35 por hora|35\/h/i.test(r.body)));
+      assert.equal(report().entries.length, 1);
+    });
+    const stopped = await say(alex, groupUid, 'Parei por hoje.', '2026-10-05T09:00:00-03:00');
+    check('Follow-up group sends do not duplicate or change a contractor shift', () => {
+      assert.ok(stopped.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'stop'));
+      assert.equal(report().open_entry, null); assert.equal(report().total_hours, 1);
+      assert.equal(report().entries.length, 1);
+    });
+    const otherWorker = await say(ben, 'cht_eval_ben', 'Alder, me mande as horas do Daniel e o dashboard do Enzo.');
+    check('Another contractor cannot access Daniel records or invoke owner messaging and dashboard tools', () => {
+      assert.ok(otherWorker.responses.length); assert.ok(otherWorker.responses.every(r => r.chat_uid === 'cht_eval_ben'));
+      assert.ok(otherWorker.tool_calls.every(c => c.name === 'plow_hours_self'));
+      assert.ok(!otherWorker.responses.some(r => /hours\.example\.test|8h|9h|08:00|09:00|uma hora|1 hora|Rowan/.test(r.body)));
+      assert.equal(report().total_hours, 1);
+    });
+    check('Group delivery uses successful real model calls without production messages', () => {
       assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
     });
   } else if (process.env.EVAL_PHASE === 'alder_reconciliation') {
