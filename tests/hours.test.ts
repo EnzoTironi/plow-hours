@@ -116,14 +116,14 @@ test("a clarified start retains its first message time, rate and timezone across
   const f = fixture(t);
   const first = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "ambiguous",
     body: "Comecei a trabalhar agora.", created_at: "2026-10-02T09:00:00-03:00" };
-  assert.match(f.ledger.clock(first, { kind: "clarify_start" }) ?? "", /09:00 BRT/);
+  assert.match(f.ledger.clock(first, { kind: "clarify_start" }) ?? "", /9:00 \(horário de São Paulo\)/);
   assert.equal(f.snapshot().entries.length, 0);
   f.ledger.manage({ ...f.contractor, rate_cents: 4000, timezone: "UTC" }, "changed-rate");
   f.restart();
   assert.equal(f.pendingStart(), first.created_at);
   const reply = { ...first, message_uid: "clarification", body: "Na landing.", created_at: "2026-10-02T09:10:00-03:00" };
   const confirmation = f.ledger.clock(reply, { kind: "confirm_start", detail: "landing" });
-  assert.match(confirmation ?? "", /09:00 BRT/);
+  assert.match(confirmation ?? "", /9:00 \(horário de São Paulo\)/);
   const entry = f.snapshot().open_entry;
   assert.ok(entry);
   assert.equal(entry.start_ms, Date.parse(first.created_at));
@@ -273,4 +273,32 @@ test("a sync in progress cannot acknowledge newer points or a different spreadsh
   f.ledger.manage({ action: "link_sheet", contractor_id: "ana", sheet_id: "spreadsheet_new" }, "relink");
   assert.throws(() => f.ledger.manage({ action: "projected", contractor_id: "ana", target: "sheet", sheet_id: "spreadsheet_ana", revision: version }, "old-sheet"), /current spreadsheet/);
   assert.equal(f.snapshot().sheet.pending, true);
+});
+
+
+test("delivery fallback is grounded in a saved clock change, never status or work notes", t => {
+  const f = fixture(t);
+  const source = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "start", body: "Starting now", created_at: "2026-10-06T09:00:00-03:00" };
+  assert.equal(f.ledger.clockChangeReceipt(source), undefined);
+  const receipt = f.ledger.clock(source, { kind: "start", detail: "Animation" });
+  assert.equal(f.ledger.clockChangeReceipt(source), receipt);
+  assert.match(receipt, /São Paulo/);
+  assert.doesNotMatch(receipt, /BRT|GMT|America\//);
+  for (const intent of [{ kind: "note", detail: "Rowan" }, { kind: "status" }, { kind: "start", detail: "Already working" }] as const) {
+    const message = { ...source, message_uid: "non-change-" + intent.kind };
+    f.ledger.clock(message, intent);
+    assert.equal(f.ledger.clockChangeReceipt(message), undefined);
+  }
+  const stop = { ...source, message_uid: "stop", created_at: "2026-10-06T09:05:00-03:00" };
+  const stopped = f.ledger.clock(stop, { kind: "stop", detail: "Done" });
+  f.restart();
+  assert.equal(f.ledger.clockChangeReceipt(stop), stopped);
+  assert.equal(f.ledger.clockChangeReceipt({ ...stop, handle: "+15550000003" }), undefined);
+  assert.equal(f.ledger.clockChangeReceipt({ ...stop, chat_uid: "cht_other" }), undefined);
+  assert.equal(f.ledger.clockChangeReceipt({ ...stop, line_uid: "other" }), undefined);
+  const unmatched = { ...stop, message_uid: "unmatched-stop", created_at: "2026-10-06T09:10:00-03:00" };
+  const pending = f.ledger.clock(unmatched, { kind: "stop", detail: "Missing start" });
+  assert.equal(f.ledger.clockChangeReceipt(unmatched), pending);
+  assert.equal(f.snapshot().entries.length, 1);
+  assert.equal(f.ledger.pendingOwnerNotices().length, 1);
 });

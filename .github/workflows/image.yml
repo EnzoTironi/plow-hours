@@ -40,6 +40,12 @@ jobs:
             '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test --test-timeout=180000 /opt/plow/tests/*.test.ts'
       - name: Probe gateway authentication and timesheet
         run: docker run --rm --network none ghcr.io/enzotironi/plow-hours:check /opt/plow/probe
+      - name: Confirm committed clocks survive silent and blocked model replies
+        run: |
+          docker run --rm --user root --network none \
+            -e PLOW_AGENT_TOKEN=fixture-only -e EVAL_PHASE=clock_confirmation -e EVAL_OUTPUT=/tmp/evidence \
+            -v "$PWD/evals:/opt/plow/evals:ro" \
+            ghcr.io/enzotironi/plow-hours:check node /opt/plow/evals/conversation.mjs
       - name: Check the local proxy and evaluator network boundaries
         run: node tests/dev-boundaries.mjs
       - name: Publish the checked release image

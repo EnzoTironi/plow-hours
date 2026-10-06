@@ -20,7 +20,9 @@ const token = process.env.PLOW_AGENT_TOKEN;
 if (!token) throw new Error('Pass the private plow-credentials with --env-file.');
 const toolProtocol = process.env.EVAL_PHASE === 'tool_protocol';
 const workerClock = ['glm_clock', 'worker_clock'].includes(process.env.EVAL_PHASE);
-const controlledRecovery = toolProtocol || process.env.EVAL_PHASE === 'group_failure';
+const clockConfirmation = process.env.EVAL_PHASE === 'clock_confirmation';
+let clockScenario = { action: 'start', final: 'NO_REPLY' };
+const controlledRecovery = clockConfirmation || toolProtocol || process.env.EVAL_PHASE === 'group_failure';
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
 const groupDelivery = process.env.EVAL_PHASE === 'alder_group_delivery';
@@ -79,8 +81,12 @@ const server = createServer(async (req, res) => {
       const observation = { ...activeTurn, model: request.model, tool_names: (request.tools ?? []).map(t => t.function?.name) };
       modelRequests.push(observation);
       if (controlledRecovery) {
-        if (!modelRecovered && !toolProtocol) return json({ error: { message: 'Controlled provider outage' } }, 503);
-        const delta = !toolProtocol ? { content: 'NO_REPLY' }
+        if (!modelRecovered && !toolProtocol && !clockConfirmation) return json({ error: { message: 'Controlled provider outage' } }, 503);
+        const delta = clockConfirmation
+          ? (!clockScenario.action || ledger.clockReceipt({ line_uid: self.line.uid, chat_uid: activeTurn.chat_uid, message_uid: activeTurn.message_uid, handle: ana.provider_key })
+            ? { content: clockScenario.final }
+            : { tool_calls: [{ index: 0, id: activeTurn.message_uid + '-clock', type: 'function', function: { name: 'plow_hours_self', arguments: JSON.stringify({ action: clockScenario.action, ...(clockScenario.action === 'note' ? { details: 'Animation for Rowan' } : {}) }) } }] })
+          : !toolProtocol ? { content: 'NO_REPLY' }
           : !modelRecovered ? { content: '<tool_call>plow_hours_start*)\n(uid="cht_eval_ana"*)\nWait, let me check the available tools first.\n</arg_value><tool_call>plow_hours_self_start(work="")=' }
           : ledger?.report('ana')[0]?.open_entry ? { content: 'Clock started. What are you working on?' }
           : { tool_calls: [{ index: 0, id: 'recovered-clock-call', type: 'function', function: { name: 'plow_hours_self', arguments: '{"action":"start"}' } }] };
@@ -274,7 +280,46 @@ try {
   await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
   await delay(1500);
   ledger = new HoursLedger('/var/lib/plow/plow-hours');
-  if (process.env.EVAL_PHASE === 'demo_onboarding') {
+  if (clockConfirmation) {
+    const group = chats.get('cht_eval_ana');
+    const start = await say(ana, group.uid, 'Starting work now.', '2026-10-06T09:00:00-03:00');
+    check('A committed start gets exactly one group confirmation even when the model returns NO_REPLY', () => {
+      assert.ok(ledger.report('ana')[0].open_entry);
+      assert.equal(start.responses.length, 1);
+      assert.equal(start.responses[0].chat_uid, group.uid);
+    });
+    clockScenario = { action: 'note', final: 'NO_REPLY' };
+    const note = await say(ana, group.uid, 'Working on an animation for Rowan.', '2026-10-06T09:01:00-03:00');
+    check('A work overview can be recorded silently without changing the start', () => {
+      assert.equal(note.responses.length, 0);
+      assert.equal(ledger.report('ana')[0].open_entry.start_ms, Date.parse('2026-10-06T09:00:00-03:00'));
+    });
+    clockScenario = { action: 'stop', final: '<tool_call>internal protocol</tool_call>' };
+    const stop = await say(ana, group.uid, 'Finished work now.', '2026-10-06T09:05:00-03:00');
+    check('A saved stop gets one safe receipt when the final contains blocked internal protocol', () => {
+      assert.equal(ledger.report('ana')[0].open_entry, null);
+      assert.equal(stop.responses.length, 1);
+      assert.equal(stop.responses[0].chat_uid, group.uid);
+      assert.ok(!stop.responses[0].body.includes('<tool_call>'));
+    });
+    clockScenario = { action: 'start', final: 'Clock started. What are you working on?' };
+    const visible = await say(ana, group.uid, 'Back at work.', '2026-10-06T09:10:00-03:00');
+    check('An existing visible confirmation is not duplicated', () => assert.equal(visible.responses.length, 1));
+    clockScenario = { action: 'stop', final: '' };
+    const empty = await say(ana, group.uid, 'Stopping now.', '2026-10-06T09:12:00-03:00');
+    check('An empty final still confirms a saved stop once', () => {
+      assert.equal(empty.responses.length, 1);
+      assert.equal(ledger.report('ana')[0].open_entry, null);
+    });
+    clockScenario = { action: undefined, final: 'NO_REPLY' };
+    const casual = await say(ana, group.uid, 'Enzo, did you like the video?', '2026-10-06T09:11:00-03:00');
+    check('Human conversation stays silent and creates no clock entry', () => {
+      assert.equal(casual.responses.length, 0);
+      assert.equal(ledger.report('ana')[0].entries.length, 2);
+    });
+    const replay = await say(ana, group.uid, start.input, start.created_at, { uid: start.message_uid });
+    check('Replaying a confirmed message sends no duplicate', () => assert.equal(replay.responses.length, 0));
+  } else if (process.env.EVAL_PHASE === 'demo_onboarding') {
     const setup = await say(owner, home.uid, 'Opa, preciso cadastrar esse worker\n- Contractor: Alex\n- Contato: alex@example.test\n- Valor: $20/hora\n- Fuso: America/Sao_Paulo');
     const worker = ledger.report().find(row => row.contractor.handle === alex.provider_key);
     check('The owner can register a worker without choosing a destination or separately requesting a group', () => {
