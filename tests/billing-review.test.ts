@@ -10,7 +10,7 @@ import { periodBounds, periodValue } from "../plugin/hours-period.ts";
 function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "hours-review-")), ledger = new HoursLedger(directory);
   t.after(() => { ledger.close(); rmSync(directory, { recursive: true }); });
-  ledger.manage({ action: "contractor", id: "ana", name: "Ana", handle: "ana@example.test", chat_uid: "cht_ana", timezone: "UTC", rate_cents: 3000 }, "profile");
+  ledger.manage({ action: "contractor", id: "ana", name: "Ana", handle: "ana@example.test", chat_uid: "cht_ana", timezone: "UTC", rate_cents: 3000, language: "pt" }, "profile");
   ledger.manage({ action: "demand", contractor_id: "ana", id: "work", project: "Website", summary: "Landing page" }, "work");
   let sequence = 0;
   const request = (country: "BR" | "US" = "BR", extra = {}) => ledger.manage({ action: "billing_request", contractor_id: "ana", country, period_start: "2026-10-02", period_end: "2026-10-02", ...extra }, `request-${++sequence}`);

@@ -10,7 +10,7 @@ function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "plow-hours-"));
   let ledger = new HoursLedger(directory);
   t.after(() => { ledger.close(); rmSync(directory, { recursive: true }); });
-  const contractor = { action: "contractor", id: "ana", name: "Ana", handle: "+15550000002", chat_uid: "cht_ana", timezone: "America/Sao_Paulo", rate_cents: 3000 };
+  const contractor = { action: "contractor", id: "ana", name: "Ana", handle: "+15550000002", chat_uid: "cht_ana", timezone: "America/Sao_Paulo", rate_cents: 3000, language: "pt" };
   ledger.manage(contractor, "contractor");
   ledger.manage({ action: "demand", id: "landing", contractor_id: "ana", project: "Website", summary: "Build the landing page", references: "github.com/team/site/issues/42" }, "demand");
   let sequence = 0;

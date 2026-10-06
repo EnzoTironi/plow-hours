@@ -72,7 +72,7 @@ function fixture(t: TestContext) {
   let ledger = new HoursLedger(directory);
   t.after(() => { ledger.close(); rmSync(directory, { recursive: true }); });
   for (const [id, name, handle] of [["ana", "Ana", "+15550000002"], ["bea", "Bea", "+15550000003"]]) {
-    ledger.manage({ action: "contractor", id, name, handle, chat_uid: `cht_${id}`, timezone: "America/Sao_Paulo", rate_cents: 3000 }, `register-${id}`);
+    ledger.manage({ action: "contractor", id, name, handle, chat_uid: `cht_${id}`, timezone: "America/Sao_Paulo", rate_cents: 3000, language: "pt" }, `register-${id}`);
     ledger.manage({ action: "demand", id: "landing", contractor_id: id, project: id === "ana" ? "Website" : "QA", summary: `${name}'s assigned work`, references: "https://github.com/example/site/issues/42" }, `demand-${id}`);
   }
   return {

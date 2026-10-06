@@ -13,7 +13,7 @@ function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "hours-integrity-"));
   let ledger = new HoursLedger(directory);
   t.after(() => { ledger.close(); rmSync(directory, { recursive: true }); });
-  const profile = { action: "contractor", id: "ana", name: "Ana", handle: "ana@example.test", chat_uid: "cht_ana", timezone: "UTC", rate_cents: 3000 };
+  const profile = { action: "contractor", id: "ana", name: "Ana", handle: "ana@example.test", chat_uid: "cht_ana", timezone: "UTC", rate_cents: 3000, language: "pt" };
   ledger.manage(profile, "register");
   for (const id of ["landing", "brand"]) ledger.manage({ action: "demand", id, contractor_id: "ana", project: id, summary: `Work on ${id}` }, id);
   const source = (uid: string, hour: string, body = "") => ({ line_uid: "ln_test", chat_uid: "cht_ana", handle: profile.handle,

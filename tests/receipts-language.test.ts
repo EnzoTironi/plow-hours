@@ -30,8 +30,14 @@ test("an English contractor's /in and /out receipts are English, with a clock ti
   assert.match(f.clock("/hours", "2026-07-15T21:47:00-07:00") ?? "", /^No clock running\./);
 });
 
-test("a contractor registered without a language keeps Portuguese receipts, now readable too", t => {
+test("a contractor registered without a language gets English receipts", t => {
   const f = fixture(t);
+  assert.match(f.clock("/in", "2026-07-15T21:41:40-07:00") ?? "", /^Clock started at Jul 15, 9:41\sPM PDT\.$/);
+  assert.match(f.clock("/out", "2026-07-15T21:46:57-07:00") ?? "", /^Clock stopped at Jul 15, 9:46\sPM PDT\. Total: 5 min\.$/);
+});
+
+test("a Portuguese contractor's receipts stay Portuguese, now readable too", t => {
+  const f = fixture(t, "pt");
   f.clock("/in", "2026-07-15T21:41:40-07:00");
   const stop = f.clock("/out", "2026-07-15T21:46:57-07:00") ?? "";
   assert.match(stop, /^Ponto encerrado às 15 de jul\.?, 21:46 GMT-7\. Total: 5 min\.$/);

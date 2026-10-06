@@ -15,7 +15,7 @@ const contractor = { ...owner, uid: "ana", role: "member", display_name: "Ana", 
 const self = { type: "agent", relationship: "self", line: { uid: "line" } };
 const home = { uid: "cht_home", status: "active", trusted: false, participants: [self, owner] };
 const group = { uid: "cht_ana", status: "active", trusted: false, participants: [self, { ...owner, uid: "owner-in-group" }, contractor] };
-const profile = { action: "contractor", id: "ana", name: "Ana", handle: contractor.provider_key, chat_uid: group.uid, timezone: "America/Sao_Paulo", rate_cents: 3000 };
+const profile = { action: "contractor", id: "ana", name: "Ana", handle: contractor.provider_key, chat_uid: group.uid, timezone: "America/Sao_Paulo", rate_cents: 3000, language: "pt" };
 
 test("an adopted contractor message recovers after restart even outside the provider history window", async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
@@ -210,7 +210,7 @@ test("changed membership does not interrupt human conversations or run clock sho
   ledger.manage(profile, "changed-group-profile");
   const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line" };
   const chat: Chat = { ...group, participants: [...group.participants, contractor] };
-  for (const body of ["Dane, pode preencher o horário?", "/in landing", "/out"]) {
+  for (const body of ["Dane, can you fill in the time?", "/in landing", "/out"]) {
     const message: Message = { uid: body, body, sender: contractor, direction: "inbound", created_at: "2026-10-05T09:00:00Z", attachments: [] };
     assert.equal(clockHours({ account, chat, message, senderIsOwner: false }), undefined);
   }
