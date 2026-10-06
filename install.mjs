@@ -27,13 +27,13 @@ entry=replaceOnce(entry,'        const result = { chat_uid: chat.uid, message_se
           ...(hoursEnabled() ? { next_step: "The group is not registered for hours yet. Complete this onboarding now with plow_hours(action=contractor), using this chat_uid and the owner's supplied name, contact, rate and timezone. Only a registered=true receipt makes it ready for clocks." } : {}) };`);
 entry=replaceOnce(entry,'        const details = { message_uid: messageUid };',`        const details = { message_uid: messageUid, request_status: "accepted", delivery_status: "unconfirmed",
           note: "Plow accepted the message request. This is not an iMessage delivery or read receipt.",
-          reply_instruction: "If this answered a public request originating in a group, finish with exactly NO_REPLY. Do not send a private confirmation, summary or duplicate of the public answer. If this was only a status notice that you will answer privately, continue executing the request and give the actual private answer." };`);
+          reply_instruction: "If this answered a public request originating in a group, finish with exactly NO_REPLY. Do not send a private confirmation, summary or duplicate of the public answer. If this was only a status notice for a group-origin request, continue executing the request, send the actual private answer with plow_reply_to to the verified owner DM, then finish with NO_REPLY." };`);
 entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(account, \`/chats/\${to}/messages\`, { body: text, attachment_uids: attachments });
   return { channel: "plow" as const, messageId: sent.uid };`, `  const response = await requestDelivery<unknown>(account, \`/chats/\${to}/messages\`, { body: text, attachment_uids: attachments });
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
-entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
+entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
 entry='import { assertHumanReply, isInternalReplyText } from "./hours-reply.ts";\n'+entry;
 entry=replaceOnce(entry,'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {',
   'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {\n  assertHumanReply(text);');
@@ -48,7 +48,7 @@ entry=replaceOnce(entry,inboundKind,kindLine+`\n  if (hoursEnabled() && account.
     return receive(account, cfg, destination.chat, { ...message, sender: destination.sender }, firstContact, history, ingress, log, chat);
   }\n  const peer = { kind, id:`);
 const route='  const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });';
-entry=replaceOnce(entry,route,route+`\n  const confirmation = clockHours({ account, chat, message, senderIsOwner });
+entry=replaceOnce(entry,route,route+`\n  if (ownerGroup) route.sessionKey = "agent:main:plow:owner-group:" + ownerGroup.uid;\n  const confirmation = clockHours({ account, chat, message, senderIsOwner });
   if (confirmation !== undefined) {
     ingress.onSubmitted();
     await durableSend(cfg, route, account.accountId, chat.uid, chat.uid, confirmation, kind);
@@ -83,17 +83,30 @@ entry=replaceOnce(entry,turnLog,`  if (hoursEnabled() && account.accountId === "
     } };
   }
 ${turnLog}`);
+entry=replaceOnce(entry,turnLog,turnLog.replace('chat: chat.uid, message:', 'chat: chat.uid, originChat: ownerGroup?.uid ?? chat.uid, message:'));
 entry=replaceOnce(entry,'  const participants = chat.participants.map(', '  const participants = (ownerGroup ?? chat).participants.map(');
 entry=replaceOnce(entry,'from: kind === "group" ?', 'from: ownerGroup ? `plow:group:${ownerGroup.uid}` : kind === "group" ?');
 entry=replaceOnce(entry,'conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name,',
   'conversation: { kind: ownerGroup ? "group" : kind, id: ownerGroup?.uid ?? chat.uid, nativeChannelId: chat.uid, label: (ownerGroup ?? chat).display_name,');
 entry=replaceOnce(entry,'payload: { first_contact: firstContact, trusted: chat.trusted, participants,',
   'payload: { first_contact: firstContact, trusted: (ownerGroup ?? chat).trusted, participants, message_origin: { kind: ownerGroup ? "group" : kind, chat_uid: ownerGroup?.uid ?? chat.uid }, final_reply_destination: { kind, chat_uid: chat.uid },');
-entry=replaceOnce(entry,'})), rawBody: body },', `})), rawBody: ownerGroup
-      ? "[Message origin: " + JSON.stringify({ kind: "group", chat_uid: ownerGroup.uid, name: ownerGroup.display_name ?? null }) + "; default final reply destination: owner DM.]\\n" + body
-      : body },`);
 const prompt='      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),';
 entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdoptionLifecycle: ingress,\n      ...(hoursEnabled() && account.accountId === "chat" ? { disableBlockStreaming: true } : {}),\n      ...(ownerGroup || hoursRestricted && kind === "group" ? { suppressTyping: true } : {}),');
+entry=replaceOnce(entry,'      sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",',
+  '      sourceReplyDeliveryMode: ownerGroup || command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",');
+entry=replaceOnce(entry,'"requesterSenderId" | "senderIsOwner">;', '"requesterSenderId" | "senderIsOwner" | "toolBindings">;');
+const ownerSessionGuard='  if (context.sessionKey !== "agent:main:main" ||';
+entry=replaceOnce(entry,ownerSessionGuard,`  const source = context.toolBindings?.plowHoursOwner;
+  const groupSource = clockSourceSchema.safeParse(source);
+  const groupSession = groupSource.success && groupSource.data.line_uid === account.lineUid && context.sessionKey === "agent:main:plow:owner-group:" + groupSource.data.chat_uid;
+  if (groupSession && context.messageChannel === "plow" && context.senderIsOwner && context.agentAccountId === "chat" && chatUid && context.requesterSenderId) {
+    const group = await request<Chat>(account, \`/chats/\${encodeURIComponent(groupSource.data.chat_uid)}\`);
+    const sender = group.participants.find(p => p.type === "member" && p.role === "owner" && normalizeHandle(p.provider_key) === normalizeHandle(groupSource.data.handle));
+    if (!sender) throw new Error("The group owner is unavailable.");
+    const verified = await ownerPrivateConversation(account, group, { sender });
+    if (verified.chat.uid !== chatUid) throw new Error("The private owner destination changed.");
+  }
+  if (context.sessionKey !== "agent:main:main" && !groupSession ||`);
 const preparePayload='      preparePayload: (payload, info) => {';
 entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursEnabled() && account.accountId === "chat") {
           if (payload.isError) {
@@ -118,7 +131,7 @@ entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursEnable
 entry=replaceOnce(entry,prompt,prompt+`\n      ...(hoursRestricted ? { groupSystemPrompt: hoursContractor
         ? contractorGroupPrompt(hoursContractor.id)
         : unavailableGroupPrompt(chat, kind === "group") } : {}),
-      ...(ownerGroup ? { groupSystemPrompt: ownerGroupPrompt(ownerGroup) } : {}),`);
+      ...(ownerGroup ? { groupSystemPrompt: ownerGroupPrompt(ownerGroup, chat.uid) } : {}),`);
 entry=replaceOnce(entry,'if (payload.isFallbackNotice) { silent ||= email; return null; }', `if (payload.isFallbackNotice) {
           silent ||= email;
           log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=empty_reply\`);
@@ -156,20 +169,6 @@ entry=replaceOnce(entry,'  log(`${outcome} chat=${chat.uid} message=${message.ui
     log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=\${reason} outcome=\${outcome}\`);
   }
   log(\`\${outcome} chat=\${chat.uid} message=\${message.uid}\`);`);
-entry=replaceOnce(entry,'      deliver: async payload => {',`      deliver: async payload => {
-        if (ownerGroup) {
-          const text = (payload.text ?? "").trim();
-          if (!text || (!payload.isError && text.startsWith(NO_REPLY_FALLBACK))) {
-            silent = true;
-            return { messageIds: [] };
-          }
-          const target = await ownerPrivateConversation(account, ownerGroup, { ...message,
-            sender: ownerGroup.participants.find(p => p.type === "member" && p.role === "owner") ?? message.sender });
-          if (target.chat.uid !== chat.uid) throw new Error("The private owner destination changed during the turn.");
-          const sent = await send(account, target.chat.uid, text, payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
-          deliveredToOwner = true;
-          return { messageIds: [sent.messageId] };
-        }`);
 entry=replaceOnce(entry,'...(!email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),','...(hoursRestricted ? { disableTools: !hoursContractor } : !email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),');
 entry=replaceOnce(entry,'if (api.registrationMode === "full") api.logger.info("plow channel registered");',`if (api.registrationMode === "full") {
       registerHoursWeb(api);
