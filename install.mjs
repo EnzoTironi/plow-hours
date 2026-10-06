@@ -15,7 +15,23 @@ if (!membersLine) throw new Error('Pinned Plow group members contract changed');
 const phonePattern = JSON.stringify('^\\+[1-9][0-9]{1,14}$');
 entry=replaceOnce(entry,membersLine,`          members: { type: "array", minItems: 1, items: { type: "string", anyOf: [{ pattern: ${phonePattern} }, { format: "email" }] }, description: "International phone numbers or iMessage email handles. The owner is included automatically." },`);
 entry=replaceOnce(entry,'Accepts phone numbers, not chat ids or email addresses.','Accepts international phone numbers or iMessage email handles, never chat IDs.');
-entry='import { clockHours, contractorGroupPrompt, hoursGroup, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\n'+entry;
+entry=replaceOnce(entry,'Sends the first message and returns the chat uid;', 'Requests the group and first message, returning a Plow chat uid. Acceptance does not verify iMessage availability or delivery. Report delivery as unconfirmed; never claim the recipient received it. Do not retry an uncertain send without the owner asking;');
+entry=replaceOnce(entry,'Use the known chat uid."', 'Use the known chat uid. The receipt confirms Plow accepted the request, not iMessage delivery; never claim the recipient received it without separate evidence."');
+entry=replaceOnce(entry,'        const chat = await requestDelivery<{ uid: string }>(account, "/chats", {','        const response = await requestDelivery<unknown>(account, "/chats", {');
+entry=replaceOnce(entry,'        api.logger.info(`plow started thread chat=${chat.uid}`);',`        const parsed = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
+        if (!parsed.success) throw new DeliveryUnknownError();
+        const chat = parsed.data;
+        api.logger.info(\`plow accepted thread request chat=\${chat.uid}\`);`);
+entry=replaceOnce(entry,'        const result = { chat_uid: chat.uid, message_sent: true };',`        const result = { chat_uid: chat.uid, request_status: "accepted", delivery_status: "unconfirmed",
+          note: "Plow accepted the group and introduction request. This does not confirm iMessage availability, group visibility or receipt by any participant." };`);
+entry=replaceOnce(entry,'        const details = { message_uid: messageUid };',`        const details = { message_uid: messageUid, request_status: "accepted", delivery_status: "unconfirmed",
+          note: "Plow accepted the message request. This is not an iMessage delivery or read receipt." };`);
+entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(account, \`/chats/\${to}/messages\`, { body: text, attachment_uids: attachments });
+  return { channel: "plow" as const, messageId: sent.uid };`, `  const response = await requestDelivery<unknown>(account, \`/chats/\${to}/messages\`, { body: text, attachment_uids: attachments });
+  const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
+  if (!sent.success) throw new DeliveryUnknownError();
+  return { channel: "plow" as const, messageId: sent.data.uid };`);
+entry='import { z } from "zod";\nimport { clockHours, contractorGroupPrompt, hoursGroup, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\n'+entry;
 const route='  const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });';
 entry=replaceOnce(entry,route,route+`\n  const confirmation = clockHours({ account, chat, message, senderIsOwner });
   if (confirmation !== undefined) {

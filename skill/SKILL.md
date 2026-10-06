@@ -23,12 +23,18 @@ contractor group can access only that group's scoped tool, `plow_hours_self`.
    owner's actual values; never guess. Use details already given and avoid a
    long initial checklist. Billing country and period are not needed to track hours.
 2. Use an existing known Plow chat uid, or `plow_start_thread` with the contractor's
-   phone number and trusted=false. The owner is included by Plow. Introduce yourself,
+   phone number or iMessage email and trusted=false. The owner is included by Plow. Introduce yourself,
    say the owner asked you to track this contractor's hours and explain the messages below.
    `plow_start_thread` accepts international phone numbers and iMessage email
    handles. Use the exact supplied address, never resolve it to a guessed number.
    The owner's explicit request to create the group authorizes its introduction.
    Do not ask for a second confirmation of that same request.
+   The receipt confirms Plow accepted the request, with delivery unconfirmed.
+   Say that plainly. A chat uid is not evidence the address has iMessage, the
+   Apple group appeared or the introduction was received. Registration checks
+   Plow's roster and permissions only. Do not assert anyone received a message
+   without evidence about that message. A worker's actual reply confirms they
+   can use that group, not delivery to every participant.
 3. Call `plow_hours(action="contractor", id="ana", name="Ana", handle="+15550000002",
    chat_uid="<returned uid>", timezone="America/Sao_Paulo", rate_cents=3000)` with the
    real values. IDs use lowercase letters, digits, underscores and hyphens.
@@ -52,6 +58,24 @@ contractor group can access only that group's scoped tool, `plow_hours_self`.
 7. When the owner wants invoicing, obtain the billing country (BR/US) and period. Then
    create the billing request below and send it in that contractor's group.
    Hours setup is complete without those values; do not make them the next required step.
+
+### A group does not appear
+
+Trust the owner's report. Explain that delivery is not confirmed; do not repeat
+that the group is working or invent a delay, a Plow UI issue or an unsupported
+SMS/WhatsApp fallback. A provider rejection means the request failed. A timeout,
+server error or malformed response leaves the outcome unknown; avoid another
+send until the owner explicitly requests it or provides a corrected contact.
+Do not decide an address lacks iMessage from its email domain or an unknown
+outcome. If there is no provider availability check, say you cannot verify it.
+
+Use the exact corrected contact to request a new group. If the old contact was
+already registered, read its report. Deactivate that incorrect registration with
+a reason and register the corrected contact with a new internal ID and the same
+setup and assigned work. Keep the earlier profile and records for the owner;
+never transfer hours or payment details to a different sender. If there are open
+or unresolved clocks, ask the owner to resolve them before deactivation. Do not
+delete history or hide that the new introduction's delivery is still unconfirmed.
 
 ## Clock messages
 

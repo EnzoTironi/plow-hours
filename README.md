@@ -51,6 +51,14 @@ examples do not start a clock.
 Repeat the setup for each contractor. One bot serves the team, with a separate
 three-person group for each worker.
 
+The agent tells you when Plow accepts a group or message request and says when
+delivery is unconfirmed. A Plow conversation ID does not prove an address has
+iMessage or that someone received the introduction. The current integration
+does not expose an iMessage availability check or delivery receipts. If a group
+does not appear, give the agent the correct iMessage contact or explicitly ask
+it to retry. A corrected contact gets a new registration; earlier hours and
+billing stay with their original sender.
+
 ## Who can see and change what
 
 | Access | Owner, in the private conversation | Contractor, in their own group |
@@ -280,6 +288,8 @@ docker run --rm --env-file plow-credentials \
 
 It requires provider credentials and consumes model usage. Add
 `-e EVAL_PHASE=group_attention` to test when the agent should reply or stay quiet.
+`-e EVAL_PHASE=onboarding_delivery` tests rejected contacts, unconfirmed sends,
+missing groups and contact correction through a real model and isolated transport.
 `-e EVAL_PHASE=group_failure` tests outage recovery through the actual gateway
 using a controlled local model fixture, without external model usage.
 These evaluations send no production messages. Live Apple iMessage delivery,
