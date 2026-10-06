@@ -97,12 +97,14 @@ entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdopt
 const preparePayload='      preparePayload: (payload, info) => {';
 entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursEnabled() && account.accountId === "chat") {
           if (payload.isError) {
+            blockedModelReply = true;
             failure = new Error("Agent reply failed");
             log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=model_error kind=\${info.kind}\`);
             return null;
           }
           if (info.kind !== "final" || isReasoningReplyPayload(payload)) return null;
           if (isInternalReplyText(payload.text ?? "")) {
+            blockedModelReply = true;
             failure = new Error("Internal tool or reasoning protocol was blocked");
             log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=internal_protocol\`);
             return null;
@@ -122,13 +124,35 @@ entry=replaceOnce(entry,'if (payload.isFallbackNotice) { silent ||= email; retur
           log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=empty_reply\`);
           return null;
         }`);
+entry=replaceOnce(entry,'  let deliveredToOwner = false;', '  let deliveredToOwner = false;\n  let deliveredToGroup = false;\n  let blockedModelReply = false;');
+entry=replaceOnce(entry,'        log(`delivered chat=${chat.uid} message=${sent.messageId}`);',
+  '        deliveredToGroup = true;\n        log(`delivered chat=${chat.uid} message=${sent.messageId}`);');
+entry=replaceOnce(entry,'  const result = await dispatched;', `  const result = await dispatched;
+  if (result.dispatched && !result.dispatchResult.deferredToActiveRun && hoursContractor && !senderIsOwner
+    && !deliveredToGroup && !hasVisibleChannelTurnDispatch(result.dispatchResult, { observedReplyDelivery })
+    && (!failure || blockedModelReply)) {
+    const receipt = hoursLedger().clockChangeReceipt({
+      line_uid: account.lineUid, chat_uid: chat.uid, handle: sender.type === "member" ? sender.provider_key : "",
+      message_uid: message.uid, created_at: message.created_at, body: message.body,
+    });
+    if (receipt) {
+      const current = await request<Chat>(account, \`/chats/\${encodeURIComponent(chat.uid)}\`);
+      if (hoursGroup(account, current)?.id !== hoursContractor.id) throw new Error("Clock confirmation group membership changed.");
+      await durableSend(cfg, route, account.accountId, chat.uid, chat.uid, receipt, kind);
+      deliveredToGroup = true;
+      silent = false;
+      failure = undefined;
+      log(\`reply_outcome chat=\${chat.uid} message=\${message.uid} reason=clock_confirmation\`);
+    }
+  }`);
+entry=replaceOnce(entry,'deliveredToOwner || silent || hasVisibleChannelTurnDispatch', 'deliveredToGroup || deliveredToOwner || silent || hasVisibleChannelTurnDispatch');
 entry=replaceOnce(entry,'  if (failure && !silent) throw failure;', `  if (failure && (!silent || hoursEnabled() && account.accountId === "chat")) {
     log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=failed\`);
     throw failure;
   }`);
 entry=replaceOnce(entry,'  log(`${outcome} chat=${chat.uid} message=${message.uid}`);', `  if (hoursEnabled() && account.accountId === "chat") {
-    const reason = outcome === "deferred" ? "deferred" : silent || dispatchResult.deliberateSilentTerminalReply ? "model_silent"
-      : deliveredToOwner || observedReplyDelivery || hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery }) ? "delivered" : "empty_reply";
+    const reason = outcome === "deferred" ? "deferred" : deliveredToGroup ? "delivered" : silent || dispatchResult.deliberateSilentTerminalReply ? "model_silent"
+      : deliveredToGroup || deliveredToOwner || observedReplyDelivery || hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery }) ? "delivered" : "empty_reply";
     log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=\${reason} outcome=\${outcome}\`);
   }
   log(\`\${outcome} chat=\${chat.uid} message=\${message.uid}\`);`);

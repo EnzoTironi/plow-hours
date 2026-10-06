@@ -78,11 +78,13 @@ export function localTime(ms: number, timezone: string) {
 }
 const hours = (ms: number) => Math.round(ms / 3_600_000 * 1_000_000) / 1_000_000;
 type Language = "en" | "pt";
-/** A receipt time a person reads at a glance: "9:46 PM PDT" (en) or "21:46 BRT" (pt), with the date when it is not today. */
+/** A local receipt time with the date when it is not today. */
 export function clockTime(ms: number, timezone: string, language: Language) {
   const day = (at: number) => new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+  const saoPaulo = timezone === "America/Sao_Paulo";
+  const label = saoPaulo ? language === "pt" ? " (horário de São Paulo)" : " (São Paulo time)" : "";
   return new Intl.DateTimeFormat(language === "pt" ? "pt-BR" : "en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit",
-    timeZoneName: "short", ...(day(ms) === day(Date.now()) ? {} : { month: "short", day: "numeric" }) }).format(ms);
+    ...(saoPaulo ? {} : { timeZoneName: "short" as const }), ...(day(ms) === day(Date.now()) ? {} : { month: "short", day: "numeric" }) }).format(ms) + label;
 }
 /** A receipt duration: "5 min", "1 h 20 min". The ledger keeps the exact interval. */
 export function duration(ms: number) {
@@ -489,6 +491,14 @@ export class HoursLedger {
     const source = JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]);
     const receipt = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(source);
     return receipt ? receiptSchema.parse(receipt).response : undefined;
+  }
+
+  clockChangeReceipt(input: ClockSource): string | undefined {
+    const receipt = this.clockReceipt(input);
+    if (!receipt) return undefined;
+    const source = JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]);
+    const changed = this.db.prepare("SELECT 1 FROM audit WHERE source=? AND action IN ('start', 'stop', 'clock_review') UNION ALL SELECT 1 FROM owner_notices WHERE source=? AND kind='clock_review' LIMIT 1").get(source, source);
+    return changed ? receipt : undefined;
   }
 
   pendingOwnerNotices() {
