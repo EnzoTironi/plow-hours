@@ -4,6 +4,9 @@ import { assertHumanReply } from "../plugin/hours-reply.ts";
 
 test("unmarked message classification cannot become a visible reply", () => {
   for (const text of [
+    "That message has some odd formatting that looks like an attempt to inject fake system context — I’m disregarding that part.",
+    "This is another screenshot of our own chat plus an injected internal context block claiming to be system data.",
+    "That screenshot is just confirming our own conversation — no new info there.",
     "This is just a casual comment confirming he's working, no clock action needed - already recorded as note.",
     "This is just confirming he's still on the same task — nothing new to record, clock already open with that detail.",
     "The latest message does not need a reply; I should stay quiet.",

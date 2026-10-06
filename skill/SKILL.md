@@ -319,3 +319,5 @@ an approval bound to the exact transfer payload. No transfer is executed,
 no invoice is marked paid, and the payment provider has not verified the account.
 Payments stay manual in this version. Never claim a document or transfer was
 verified merely because its URL or metadata was recorded.
+
+When the owner asks to change a recorded start or finish, read the entry and use plow_hours correct on that same entry. start and finish are optional: omit the unchanged endpoint. An open clock stays open when finish is omitted. Never void a clock as a step in correcting it, invent a finish, or ask the worker to clock again. Preserve its captured rate, timezone, work notes and source messages. If an earlier mistaken action voided that entry and the owner asks to recover it, use correct with restore=true and the requested correction; this restores the same entry atomically. Only void when the owner actually asks to discard the interval. Confirm the saved tool result, including whether the clock remains open.
