@@ -20,12 +20,15 @@ const token = process.env.PLOW_AGENT_TOKEN;
 if (!token) throw new Error('Pass the private plow-credentials with --env-file.');
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
-const owner = { type: 'member', uid: 'mem_eval_owner', role: 'owner', display_name: 'Dane', provider_key: '+15550000001' };
+const alderAttention = process.env.EVAL_PHASE === 'alder_attention';
+const agentName = alderAttention ? 'Alder' : 'Plow Hours';
+if (alderAttention) process.env.AGENT_NAME = agentName;
+const owner = { type: 'member', uid: 'mem_eval_owner', role: 'owner', display_name: alderAttention ? 'Enzo' : 'Dane', provider_key: '+15550000001' };
 const ana = { ...owner, uid: 'mem_eval_ana', role: 'member', display_name: 'Ana', provider_key: '+15550000002' };
 const ben = { ...ana, uid: 'mem_eval_ben', display_name: 'Ben', provider_key: 'ben@example.test' };
 const alexWrong = { ...ana, uid: 'mem_eval_alex_wrong', display_name: 'Alex', provider_key: 'alex@unreachable.example.test' };
-const alex = { ...alexWrong, uid: 'mem_eval_alex', provider_key: 'alex@example.test' };
-const self = { type: 'agent', relationship: 'self', line: { uid: 'ln_eval', display_name: 'Plow Hours' } };
+const alex = { ...alexWrong, uid: 'mem_eval_alex', display_name: alderAttention ? 'Pueblo' : 'Alex', provider_key: alderAttention ? 'pueblo@example.test' : 'alex@example.test' };
+const self = { type: 'agent', relationship: 'self', line: { uid: 'ln_eval', display_name: agentName } };
 const home = { uid: 'cht_eval_owner', status: 'active', trusted: false, participants: [owner, self] };
 const chats = new Map([[home.uid, home]]);
 const messages = new Map([[home.uid, []]]);
@@ -91,7 +94,7 @@ const server = createServer(async (req, res) => {
       res.end();
       return;
     }
-    if (url.pathname === '/v1/agents/me') { dashboardReads++; return json({ agent: { name: 'Plow Hours', web_url: 'https://hours.example.test' }, line: self.line, chats: [...chats.values()] }); }
+    if (url.pathname === '/v1/agents/me') { dashboardReads++; return json({ agent: { name: agentName, web_url: 'https://hours.example.test' }, line: self.line, chats: [...chats.values()] }); }
     if (url.pathname === '/v1/auth/owner-uid') return json({ owner_uid: 'owner-account' });
     if (url.pathname === '/v1/ws/ticket') return json({ ticket: 'eval-only' });
     if (url.pathname === '/v1/chats') {
@@ -145,7 +148,7 @@ process.env.HOME = '/var/lib/plow';
 process.env.OPENCLAW_GATEWAY_PASSWORD = randomBytes(32).toString('hex');
 delete process.env.OPENCLAW_GATEWAY_TOKEN;
 await mkdir('/var/lib/plow/workspace', { recursive: true });
-const config = renderConfig({ owner_uid: 'owner-account', agent: { name: 'Plow Hours', web_url: 'https://hours.example.test' }, line: self.line, chats: [home] }, apiBase, 'untrusted');
+const config = renderConfig({ owner_uid: 'owner-account', agent: { name: agentName, web_url: 'https://hours.example.test' }, line: self.line, chats: [home] }, apiBase, 'untrusted');
 await writeFile('/var/lib/plow/workspace/AGENTS.md', await renderPrompt(await readFile('/opt/plow/prompt/AGENTS.md', 'utf8'), null, token, 'untrusted', 'https://hours.example.test'));
 if (process.env.EVAL_CODEX_AUTH) {
   config.agents.defaults.model = { primary: 'openai/gpt-6-sol', fallbacks: [] };
@@ -285,6 +288,62 @@ try {
       unconfirmed(followup); noFallback(followup);
     });
     check('The delivery conversation uses successful real model calls', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
+    });
+  } else if (alderAttention) {
+    await say(owner, home.uid, `Cadastre Pueblo, ${alex.provider_key}, USD 20 por hora, America/Sao_Paulo. Crie um grupo comigo e ele. Não há tarefa cadastrada.`);
+    const groupUid = 'cht_eval_alex';
+    check('Alder onboards the contractor with the supplied name and contact', () => {
+      assert.equal(config.agents.entries.main.identity.name, 'Alder');
+      assert.equal(ledger.report().find(r => r.contractor.handle === alex.provider_key).contractor.name, 'Pueblo');
+      assert.ok(chats.has(groupUid));
+    });
+    async function quiet(who, input, reply_to) {
+      const before = ledger.report();
+      const turn = await say(who, groupUid, input, undefined, { reply_to });
+      check('Alder stays silent for human conversation: ' + input, () => {
+        assert.ok(turn.model_requests > 0);
+        assert.deepEqual(turn.responses, []);
+        assert.deepEqual(turn.tool_calls, []);
+        assert.deepEqual(ledger.report(), before);
+        assert.equal(typingStarts.get(groupUid) ?? 0, 0);
+      });
+      return turn;
+    }
+    const question = await quiet(owner, 'Pueblo, consegue registrar seu trabalho a partir de agora por aqui?');
+    await quiet(owner, 'Pueblo, pode registrar suas horas aqui quando começar?');
+    await quiet(alex, 'Enzo, pode conferir minhas horas depois?');
+    const originalQuestion = messages.get(groupUid).find(m => m.uid === question.message_uid);
+    await quiet(alex, 'Sim, consigo.', originalQuestion);
+    const ownerDashboard = await say(owner, groupUid, 'Alder, me envie o dashboard das horas e um resumo do Pueblo.');
+    check('Alder answers an addressed owner request only in their private DM', () => {
+      assert.ok(ownerDashboard.responses.length);
+      assert.ok(ownerDashboard.responses.every(r => r.chat_uid === home.uid));
+      assert.ok(ownerDashboard.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'dashboard'));
+      assert.ok(ownerDashboard.responses.some(r => r.body.includes('https://hours.example.test/hours')));
+    });
+    await quiet(owner, 'Pueblo, consegue registrar seu trabalho a partir de agora por aqui?');
+    const start = await say(alex, groupUid, 'Comecei a trabalhar na animação para o Rowan agora.', '2026-10-05T21:03:00-03:00');
+    const report = () => ledger.report().find(r => r.contractor.handle === alex.provider_key);
+    check('The contractor can still clock work naturally without mentioning Alder', () => {
+      assert.ok(start.responses.some(r => r.chat_uid === groupUid));
+      assert.equal(report().open_entry.start_ms, Date.parse('2026-10-05T21:03:00-03:00'));
+      assert.ok(start.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'start'));
+    });
+    await quiet(owner, 'Pueblo, amanhã você continua a animação?');
+    const workerReport = await say(alex, groupUid, 'Alder, quanto tempo eu já registrei?');
+    check('Alder recognizes its configured name when the contractor asks for their hours', () => {
+      assert.ok(workerReport.responses.length);
+      assert.ok(workerReport.responses.every(r => r.chat_uid === groupUid));
+      assert.ok(workerReport.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'report'));
+    });
+    await quiet(alex, 'Enzo, vou precisar do arquivo original para continuar.');
+    const stop = await say(alex, groupUid, 'Parei por hoje.', '2026-10-05T22:03:00-03:00');
+    check('Silence never interferes with a clear finish and exactly one hour is recorded', () => {
+      assert.equal(report().open_entry, null); assert.equal(report().total_hours, 1);
+      assert.ok(stop.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'stop'));
+    });
+    check('Alder attention uses successful real model calls without production messages', () => {
       assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
     });
   } else if (process.env.EVAL_PHASE === 'work_overview') {

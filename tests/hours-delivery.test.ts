@@ -41,6 +41,67 @@ test("private routing binds the actual group owner to their live DM, rejecting w
   await assert.rejects(() => ownerPrivateConversation(account, group, message), /owner/);
 });
 
+test("an owner group turn keeps the original people and conversation facts while tools and delivery stay private", async t => {
+  const { server, apiBase, abortAfter } = await websocketFixture(t);
+  const source = { ...group, display_name: "Enzo, Pueblo and Alder", participants: [
+    { ...owner, uid: "owner-in-group", display_name: "Enzo" }, { ...worker, display_name: "Pueblo" }, self,
+  ] };
+  const destination = { ...home, display_name: "Private owner chat", participants: [{ ...owner, display_name: "Enzo" }, self] };
+  hoursLedger().manage({ action: "contractor", id: "pueblo", name: "Pueblo", handle: worker.provider_key,
+    chat_uid: source.uid, timezone: "America/Sao_Paulo", rate_cents: 2000 }, "register-pueblo");
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith("/ws/ticket")) return Response.json({ ticket: "fixture" });
+    if (path === "/v1/chats") return Response.json({ data: [destination, source], has_more: false });
+    if (path.endsWith("/messages")) return Response.json({ data: [], has_more: false });
+    if (path.endsWith(`/${source.uid}`)) return Response.json(source);
+    if (path.endsWith(`/${destination.uid}`)) return Response.json(destination);
+    assert.fail("Unexpected provider request: " + path);
+  });
+  server.on("connection", (socket: { send: (text: string) => void }) => {
+    socket.send(JSON.stringify({ event_type: "message_received", event_id: "human-question", chat_id: source.uid,
+      data: { message: { uid: "human-question", sender: source.participants[0], direction: "inbound", attachments: [],
+        created_at: "2026-10-05T21:00:00Z", body: "Pueblo, consegue registrar seu trabalho a partir de agora por aqui?" } } }));
+  });
+  const contextSchema = z.object({
+    from: z.string(), route: z.object({ sessionKey: z.string() }),
+    conversation: z.object({ kind: z.string(), id: z.string(), nativeChannelId: z.string(), label: z.string() }),
+    reply: z.object({ to: z.string(), nativeChannelId: z.string() }),
+    supplemental: z.object({ channelStructuredContext: z.array(z.object({ payload: z.object({
+      participants: z.array(z.object({ name: z.string(), type: z.string(), role: z.string() })),
+    }) })) }),
+  });
+  let seen: z.infer<typeof contextSchema> | undefined;
+  const account = { apiBase, accountId: "chat", lineUid: "line", threadTrust: "untrusted" };
+  const cfg = { agents: { entries: { main: { identity: { name: "Alder" } } } }, channels: { plow: account } };
+  let channel: { gateway: { startAccount: (value: object) => Promise<void> } } | undefined;
+  entry.register({ registrationMode: "full", logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
+    registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
+    runtime: { channel: { routing: { resolveAgentRoute }, session: { resolveStorePath, updateLastRoute }, inbound: {
+      buildContext(raw: unknown) { seen = contextSchema.parse(raw); return { SessionKey: seen.route.sessionKey }; },
+      async dispatch({ replyOptions }: { replyOptions: { turnAdoptionLifecycle: { onAdopted(): Promise<void> } } }) {
+        await replyOptions.turnAdoptionLifecycle.onAdopted();
+        return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
+      },
+    } } },
+  });
+  assert.ok(channel);
+  const controller = abortAfter(10_000);
+  const logs: string[] = [];
+  await channel.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(value: string) {
+    logs.push(value); if (value.includes("stage=terminal")) controller.abort();
+  } } });
+  assert.ok(seen, logs.join("\n"));
+  assert.ok(logs.some(value => value.includes("stage=terminal")), logs.join("\n"));
+  assert.equal(seen.from, `plow:group:${source.uid}`);
+  assert.equal(seen.conversation.kind, "group"); assert.equal(seen.conversation.id, source.uid);
+  assert.equal(seen.conversation.label, source.display_name);
+  assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.participants.map(p => p.name), ["Enzo", "Pueblo", "Alder"]);
+  assert.equal(seen.route.sessionKey, "agent:main:main");
+  assert.equal(seen.conversation.nativeChannelId, destination.uid);
+  assert.equal(seen.reply.to, `plow:${destination.uid}`); assert.equal(seen.reply.nativeChannelId, destination.uid);
+});
+
 function ownerTools(senderIsOwner = true) {
   const tools = new Map<string, Tool>();
   const cfg = {
