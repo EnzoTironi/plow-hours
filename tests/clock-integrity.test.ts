@@ -196,7 +196,7 @@ test("an owner recovers a missed start from the saved stop with its original tim
   assert.ok(report.audit.some(a => a.action === "reconcile_stop"));
   assert.deepEqual(f.ledger.manage(correction, "recover-start"), receipt);
   assert.throws(() => f.ledger.manage(correction, "new-tool-call"), /unavailable/);
-  assert.match(f.ledger.clock({ ...stop, created_at: "2026-10-02T18:00:00Z" }, { kind: "stop", detail: "retry" }) ?? "", /4.283333 h/);
+  assert.match(f.ledger.clock({ ...stop, created_at: "2026-10-02T18:00:00Z" }, { kind: "stop", detail: "retry" }) ?? "", /Total: 4 h 17 min\./);
   assert.equal(f.report().entries.length, 1);
   f.ledger.manage({ action: "billing_request", contractor_id: "ana", country: "US", period_start: "2026-10-02", period_end: "2026-10-02" }, "billing");
   f.ledger.manage({ action: "close_period", contractor_id: "ana" }, "close");

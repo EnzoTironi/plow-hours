@@ -19,7 +19,7 @@ export type ClockIntent = NonNullable<ReturnType<typeof clockCommand>> | StartIn
   | { kind: "note"; detail: string; project?: string };
 const contractorSchema = z.object({
   id, name: text, handle: text, chat_uid: text, timezone: text,
-  rate_cents: z.number().int().min(0).max(100_000_000),
+  rate_cents: z.number().int().min(0).max(100_000_000), language: z.enum(["en", "pt"]),
   revision: z.number().int(), sheet_id: z.string().nullable(),
   sheet_revision: z.number().int(), wiki_revision: z.number().int(),
   active: z.number().int().min(0).max(1),
@@ -32,7 +32,8 @@ type Contractor = z.infer<typeof contractorSchema>;
 type Entry = z.infer<typeof entrySchema>;
 
 export const managementSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("contractor"), id, name: text, handle: text, chat_uid: text, timezone: text, rate_cents: z.number().int().min(0).max(100_000_000) }).strict(),
+  z.object({ action: z.literal("contractor"), id, name: text, handle: text, chat_uid: text, timezone: text, rate_cents: z.number().int().min(0).max(100_000_000),
+    language: z.enum(["en", "pt"]).default("pt") }).strict(),
   z.object({ action: z.literal("demand"), id, contractor_id: id, project: text, summary: text, references: z.string().max(4000).default("") }).strict(),
   z.object({ action: z.literal("correct"), entry_id: text, start: timestamp, finish: timestamp, reason: text, demand_id: id.optional() }).strict(),
   z.object({ action: z.literal("void"), entry_id: text, reason: text }).strict(),
@@ -76,6 +77,77 @@ export function localTime(ms: number, timezone: string) {
   }).format(ms).replace("−", "-");
 }
 const hours = (ms: number) => Math.round(ms / 3_600_000 * 1_000_000) / 1_000_000;
+type Language = "en" | "pt";
+/** A receipt time a person reads at a glance: "9:46 PM PDT" (en) or "21:46 BRT" (pt), with the date when it is not today. */
+export function clockTime(ms: number, timezone: string, language: Language) {
+  const day = (at: number) => new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+  return new Intl.DateTimeFormat(language === "pt" ? "pt-BR" : "en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit",
+    timeZoneName: "short", ...(day(ms) === day(Date.now()) ? {} : { month: "short", day: "numeric" }) }).format(ms);
+}
+/** A receipt duration: "5 min", "1 h 20 min". The ledger keeps the exact interval. */
+export function duration(ms: number) {
+  const minutes = Math.max(ms > 0 ? 1 : 0, Math.round(ms / 60_000)), h = Math.floor(minutes / 60), m = minutes % 60;
+  return h ? `${h} h${m ? ` ${m} min` : ""}` : `${m} min`;
+}
+/** Every clock receipt a contractor reads, in the language they were registered with. Shortcut commands send these
+ * without a model turn, so they must already be in the contractor's language. Owner notices keep their own copy. */
+const RECEIPTS = {
+  pt: {
+    lateStart: "Este início chegou atrasado e vem antes do ponto que está aberto.",
+    confirmBeforeStart: "A confirmação veio antes do início pendente.",
+    overlaps: "Esse horário cruza um ponto existente.",
+    afterClose: "Este início chegou depois do fechamento do período.",
+    stopCrosses: "Esse encerramento cruza outro ponto ou vem antes do início.",
+    conflict: (reason: string) => `${reason} Guardei a mensagem com seu horário original para o dono revisar. O registro de horas foi preservado; a cobrança aguarda essa revisão.`,
+    alreadyOpen: (at: string) => `Seu ponto já está aberto desde ${at}. Se mudou de atividade, posso acrescentar uma anotação.`,
+    pendingCancelled: "Início pendente cancelado. Nenhuma hora foi registrada.",
+    clarifyStart: (at: string) => `Recebi seu início às ${at}. Qual demanda você está fazendo? Vou manter esse horário quando você confirmar.`,
+    noPendingStart: "Não há um início pendente desta conversa para confirmar. Me diga quando começar uma demanda.",
+    started: (at: string, work: string) => `Ponto iniciado às ${at}.${work ? ` Trabalho: ${work}.` : ""}`,
+    recoveredStop: (stop: string) => ` O encerramento que chegou antes também foi recuperado: ${stop}`,
+    stopped: (at: string, total: string, long: boolean) => `Ponto encerrado às ${at}. Total: ${total}.${long ? " Esse bloco passou de 12 horas e precisa da revisão do dono antes do fechamento." : ""}`,
+    statusOpen: (at: string, work: string) => `Ponto aberto desde ${at}.${work ? ` Trabalho: ${work}` : ""}`,
+    statusNone: "Nenhum ponto aberto. Me diga quando começar e em qual tarefa.",
+    noteNoClock: "Não há um ponto aberto para anotar esse trabalho. Me diga quando começar.",
+    noted: "Anotação registrada. Seu ponto continua aberto com o mesmo horário inicial.",
+    switchNoClock: "Não há um ponto aberto para trocar. Me diga quando começar a nova tarefa.",
+    switchSame: "Você já está trabalhando nessa tarefa; mantive o horário inicial.",
+    switchFailed: "Não consegui trocar: confira a tarefa e o horário com o dono. O ponto anterior continua aberto.",
+    stopNoClock: "Você não tem ponto aberto. Guardei este encerramento com seu horário original para recuperar um início atrasado. O dono pode revisar se faltou o início.",
+    tooLong: "Envie os detalhes em até 4.000 caracteres.",
+    ownerClosed: "O dono revisou e encerrou esta pendência; nenhuma hora foi acrescentada por esta mensagem.",
+    ownerConfirmed: (start: string, finish: string, total: string) => `O dono confirmou o início às ${start}. Ponto encerrado às ${finish}. Total: ${total}.`,
+    voided: "Esse registro foi anulado pelo dono; não conta nas horas.",
+  },
+  en: {
+    lateStart: "This start arrived late and comes before the clock that is already running.",
+    confirmBeforeStart: "The confirmation came before the pending start.",
+    overlaps: "That time overlaps a clock already recorded.",
+    afterClose: "This start arrived after the billing period closed.",
+    stopCrosses: "That stop overlaps another clock or comes before the start.",
+    conflict: (reason: string) => `${reason} I saved your message with its original time for the owner to review. Your hours are preserved; billing waits for that review.`,
+    alreadyOpen: (at: string) => `Your clock has been running since ${at}. If you switched tasks, I can add a note.`,
+    pendingCancelled: "Pending start cancelled. No hours were recorded.",
+    clarifyStart: (at: string) => `Got your start at ${at}. What are you working on? I'll keep that start time when you confirm.`,
+    noPendingStart: "There's no pending start in this conversation to confirm. Tell me when you start working.",
+    started: (at: string, work: string) => `Clock started at ${at}.${work ? ` Work: ${work}.` : ""}`,
+    recoveredStop: (stop: string) => ` The stop that arrived earlier was recovered too: ${stop}`,
+    stopped: (at: string, total: string, long: boolean) => `Clock stopped at ${at}. Total: ${total}.${long ? " This block is over 12 hours and needs the owner's review before it closes." : ""}`,
+    statusOpen: (at: string, work: string) => `Clock running since ${at}.${work ? ` Work: ${work}` : ""}`,
+    statusNone: "No clock running. Tell me when you start and what you're working on.",
+    noteNoClock: "There's no clock running to add that note to. Tell me when you start.",
+    noted: "Noted. Your clock is still running from the same start time.",
+    switchNoClock: "There's no clock running to switch. Tell me when you start the new task.",
+    switchSame: "You're already on that task; I kept the original start time.",
+    switchFailed: "I couldn't switch: check the task and time with the owner. The previous clock is still running.",
+    stopNoClock: "You don't have a clock running. I saved this stop with its original time in case a late start arrives; the owner can review a missing start.",
+    tooLong: "Please send details in 4,000 characters or fewer.",
+    ownerClosed: "The owner reviewed and closed this item; no hours were added from this message.",
+    ownerConfirmed: (start: string, finish: string, total: string) => `The owner confirmed the start at ${start}. Clock stopped at ${finish}. Total: ${total}.`,
+    voided: "The owner voided this record; it doesn't count toward hours.",
+  },
+} satisfies Record<Language, Record<string, string | ((...args: never[]) => string)>>;
+type ConflictReason = "lateStart" | "confirmBeforeStart" | "overlaps" | "afterClose" | "stopCrosses";
 const sheetText = (value: string) => /^[=+\-@]/.test(value.trimStart()) ? `'${value}` : value;
 const markdownText = (value: string) => value.replace(/[\r\n\t]+/g, " ").replace(/[\\`*_\[\]<>#|]/g, "\\$&");
 function workRecord(value: unknown, secrets: readonly string[]): unknown {
@@ -103,7 +175,8 @@ export class HoursLedger {
       PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS contractors (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, handle TEXT NOT NULL UNIQUE, chat_uid TEXT NOT NULL,
-        timezone TEXT NOT NULL, rate_cents INTEGER NOT NULL CHECK(rate_cents >= 0), revision INTEGER NOT NULL DEFAULT 1,
+        timezone TEXT NOT NULL, rate_cents INTEGER NOT NULL CHECK(rate_cents >= 0),
+        language TEXT NOT NULL DEFAULT 'pt' CHECK(language IN ('en','pt')), revision INTEGER NOT NULL DEFAULT 1,
         sheet_id TEXT, sheet_revision INTEGER NOT NULL DEFAULT 0, wiki_revision INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS demands (
@@ -143,6 +216,8 @@ export class HoursLedger {
         if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column))
           this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} INTEGER NOT NULL DEFAULT ${column === "active" ? 1 : 0} CHECK(${column} IN (0,1))`);
       }
+      if (!this.db.prepare("PRAGMA table_info(contractors)").all().some(row => row.name === "language"))
+        this.db.exec("ALTER TABLE contractors ADD COLUMN language TEXT NOT NULL DEFAULT 'pt' CHECK(language IN ('en','pt'))");
       if (!this.db.prepare("PRAGMA table_info(clock_inbox)").all().some(row => row.name === "review_reason"))
         this.db.exec("ALTER TABLE clock_inbox ADD COLUMN review_reason TEXT NOT NULL DEFAULT ''");
       if (!this.db.prepare("PRAGMA table_info(owner_notices)").all().some(row => row.name === "kind"))
@@ -330,24 +405,25 @@ export class HoursLedger {
     const origin = command.kind === "confirm_start" && pending ? pending : original;
     const ms = Date.parse(origin.source.created_at);
     const active = this.open(contractor.id);
+    const say = RECEIPTS[contractor.language];
     if (active) return ms < active.start_ms && command.kind !== "cancel_start"
-      ? this.clockConflict(contractor, origin.source, "Este início chegou atrasado e vem antes do ponto que está aberto.")
-      : `Seu ponto já está aberto desde ${localTime(active.start_ms, active.timezone)}. Se mudou de atividade, posso acrescentar uma anotação.`;
+      ? this.clockConflict(contractor, origin.source, "lateStart")
+      : say.alreadyOpen(clockTime(active.start_ms, active.timezone, contractor.language));
     if (command.kind === "cancel_start") {
       this.db.prepare("DELETE FROM pending_starts WHERE contractor_id = ?").run(contractor.id);
-      return "Início pendente cancelado. Nenhuma hora foi registrada.";
+      return say.pendingCancelled;
     }
     if (command.kind === "clarify_start") {
       if (!pending) this.db.prepare("INSERT INTO pending_starts(contractor_id, source_json, rate_cents, timezone) VALUES (?, ?, ?, ?)")
         .run(contractor.id, JSON.stringify(original.source), original.rate_cents, original.timezone);
       const start = pending?.source.created_at ?? original.source.created_at;
-      return `Recebi seu início às ${localTime(Date.parse(start), pending?.timezone ?? original.timezone)}. Qual demanda você está fazendo? Vou manter esse horário quando você confirmar.`;
+      return say.clarifyStart(clockTime(Date.parse(start), pending?.timezone ?? original.timezone, contractor.language));
     }
     if (command.kind === "confirm_start" && (!pending || pending.source.line_uid !== input.line_uid
       || pending.source.chat_uid !== input.chat_uid || normalizeHandle(pending.source.handle) !== normalizeHandle(input.handle))) {
-      return "Não há um início pendente desta conversa para confirmar. Me diga quando começar uma demanda.";
+      return say.noPendingStart;
     }
-    if (ms > Date.parse(input.created_at)) return this.clockConflict(contractor, input, "A confirmação veio antes do início pendente.");
+    if (ms > Date.parse(input.created_at)) return this.clockConflict(contractor, input, "confirmBeforeStart");
     const source = JSON.stringify([origin.source.line_uid, origin.source.chat_uid, origin.source.message_uid]);
     const assigned = this.db.prepare("SELECT * FROM demands WHERE id = ? AND contractor_id = ? AND active=1 AND reported=0").get(command.detail, contractor.id);
     const description = workText(command.description ?? (assigned ? "" : command.detail), this.billing.secrets(contractor.id));
@@ -359,8 +435,8 @@ export class HoursLedger {
     const waiting = this.unmatchedStops(contractor.id)
       .find(row => row.message.line_uid === input.line_uid && row.message.chat_uid === input.chat_uid && Date.parse(row.message.created_at) > ms);
     const finish = waiting ? Date.parse(waiting.message.created_at) : null;
-    if (this.overlaps(contractor.id, ms, finish, source)) return this.clockConflict(contractor, origin.source, "Esse horário cruza um ponto existente.");
-    if (this.billing.isLocked(contractor.id, ms, finish)) return this.clockConflict(contractor, origin.source, "Este início chegou depois do fechamento do período.");
+    if (this.overlaps(contractor.id, ms, finish, source)) return this.clockConflict(contractor, origin.source, "overlaps");
+    if (this.billing.isLocked(contractor.id, ms, finish)) return this.clockConflict(contractor, origin.source, "afterClose");
     this.billing.assertUnlocked(contractor.id, ms, finish);
     if (!assigned) this.db.prepare('INSERT INTO demands(id, contractor_id, project, summary, "references", reported) VALUES (?, ?, ?, ?, ?, 1)')
       .run(demand.id, contractor.id, demand.project, demand.summary, "");
@@ -370,19 +446,20 @@ export class HoursLedger {
     this.db.prepare("DELETE FROM pending_starts WHERE contractor_id = ?").run(contractor.id);
     this.bump(contractor.id);
     this.audit(source, "start", undefined, { contractor_id: contractor.id, demand_id: demand.id, start_ms: ms, details: description, project: demand.project });
-    let response = `Ponto iniciado às ${localTime(ms, origin.timezone)}.${description ? ` Trabalho: ${description}.` : ""}`;
+    let response = say.started(clockTime(ms, origin.timezone, contractor.language), description);
     if (waiting && finish !== null) {
       const stop = this.finishClock(entrySchema.parse(this.db.prepare("SELECT * FROM entries WHERE id=?").get(entryId)), finish, waiting.details, waiting.source);
       this.db.prepare("UPDATE receipts SET response=? WHERE source=?").run(stop, waiting.source);
       this.db.prepare("DELETE FROM unmatched_stops WHERE source=?").run(waiting.source);
       this.completeOwnerNotice(waiting.source);
-      response += ` O encerramento que chegou antes também foi recuperado: ${stop}`;
+      response += say.recoveredStop(stop);
     }
     if (command.kind === "confirm_start") this.db.prepare("UPDATE receipts SET response = ? WHERE source = ?").run(response, source);
     return response;
   }
 
-  private clockConflict(contractor: Contractor, input: ClockSource, reason: string) {
+  private clockConflict(contractor: Contractor, input: ClockSource, why: ConflictReason) {
+    const reason = RECEIPTS.pt[why];
     this.rememberClockMessage(input);
     const source = JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]);
     this.db.prepare("UPDATE clock_inbox SET complete=1, review_reason=?, source_json=json_set(source_json, '$.body', '') WHERE source=?").run(reason, source);
@@ -390,7 +467,8 @@ export class HoursLedger {
     this.bump(contractor.id);
     this.audit(source, "clock_review", undefined, { contractor_id: contractor.id, created_at: input.created_at, reason });
     this.queueClockReviewNotice(contractor, input, reason);
-    return `${reason} Guardei a mensagem com seu horário original para o dono revisar. O registro de horas foi preservado; a cobrança aguarda essa revisão.`;
+    const say = RECEIPTS[contractor.language];
+    return say.conflict(say[why]);
   }
 
   private finishClock(active: Entry, ms: number, details: string, source: string) {
@@ -399,7 +477,16 @@ export class HoursLedger {
     this.db.prepare("UPDATE entries SET end_ms=?, details=?, stop_message=? WHERE id=?").run(ms, clean, source, active.id);
     this.bump(active.contractor_id);
     this.audit(source, "stop", active, { ...active, end_ms: ms, details: clean, stop_message: source });
-    return `Ponto encerrado às ${localTime(ms, active.timezone)}. ${hours(ms - active.start_ms)} h registradas.${ms - active.start_ms > 12 * 3_600_000 ? " Esse bloco passou de 12 horas e precisa da revisão do dono antes do fechamento." : ""}`;
+    const language = this.contractor(active.contractor_id).language;
+    return RECEIPTS[language].stopped(clockTime(ms, active.timezone, language), duration(ms - active.start_ms), ms - active.start_ms > 12 * 3_600_000);
+  }
+
+  /** The last clock receipts sent in a contractor's group, oldest first. Shortcut commands are answered by the channel
+   * without a model turn, so the group prompt carries these for a follow-up like "what did you say?". */
+  recentReceipts(contractorId: string, limit = 3) {
+    const chat = this.contractor(contractorId).chat_uid;
+    return this.db.prepare("SELECT response FROM receipts WHERE CASE WHEN json_valid(source) THEN json_extract(source, '$[1]') END = ? ORDER BY rowid DESC LIMIT ?").all(chat, limit)
+      .map(row => receiptSchema.parse(row).response).reverse();
   }
 
   clockReceipt(input: ClockSource): string | undefined {
@@ -458,12 +545,11 @@ export class HoursLedger {
       const receipt = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(source);
       if (receipt) return receiptSchema.parse(receipt).response;
       let response: string;
-      const active = this.open(contractor.id);
+      const active = this.open(contractor.id), say = RECEIPTS[contractor.language];
       if (command.kind === "status") {
-        response = active ? `Ponto aberto desde ${localTime(active.start_ms, active.timezone)}.${active.details ? ` Trabalho: ${active.details}` : ""}`
-          : "Nenhum ponto aberto. Me diga quando começar e em qual tarefa.";
+        response = active ? say.statusOpen(clockTime(active.start_ms, active.timezone, contractor.language), active.details) : say.statusNone;
       } else if (command.kind === "note") {
-        if (!active) response = "Não há um ponto aberto para anotar esse trabalho. Me diga quando começar.";
+        if (!active) response = say.noteNoClock;
         else {
           const details = workText([active.details, command.detail].filter(Boolean).join("\n"), this.billing.secrets(contractor.id));
           const demand = demandSchema.parse(this.db.prepare("SELECT * FROM demands WHERE contractor_id=? AND id=?").get(contractor.id, active.demand_id));
@@ -475,16 +561,16 @@ export class HoursLedger {
           this.db.prepare("UPDATE entries SET details=? WHERE id=?").run(details, active.id);
           this.bump(contractor.id);
           this.audit(source, "note", active, { ...active, details, project });
-          response = "Anotação registrada. Seu ponto continua aberto com o mesmo horário inicial.";
+          response = say.noted;
         }
       } else if (command.kind === "switch") {
-        if (!active) response = "Não há um ponto aberto para trocar. Me diga quando começar a nova tarefa.";
-        else if (active.demand_id === command.detail) response = "Você já está trabalhando nessa tarefa; mantive o horário inicial.";
-        else if (ms <= active.start_ms || !this.db.prepare("SELECT id FROM demands WHERE contractor_id=? AND id=? AND active=1").get(contractor.id, command.detail)) response = "Não consegui trocar: confira a tarefa e o horário com o dono. O ponto anterior continua aberto.";
+        if (!active) response = say.switchNoClock;
+        else if (active.demand_id === command.detail) response = say.switchSame;
+        else if (ms <= active.start_ms || !this.db.prepare("SELECT id FROM demands WHERE contractor_id=? AND id=? AND active=1").get(contractor.id, command.detail)) response = say.switchFailed;
         else {
           const stopped = this.finishClock(active, ms, command.details, source);
           const started = this.startClock(contractor, input, { kind: "start", detail: command.detail });
-          if (!started.startsWith("Ponto iniciado")) throw new Error("Could not start the new task; the whole switch was rolled back.");
+          if (!this.open(contractor.id)) throw new Error("Could not start the new task; the whole switch was rolled back.");
           response = `${stopped} ${started}`;
         }
       } else if (command.kind !== "stop") {
@@ -494,11 +580,11 @@ export class HoursLedger {
           .run(source, contractor.id, JSON.stringify({ ...input, body: "" }), workText(command.detail, this.billing.secrets(contractor.id)));
         this.billing.invalidateApproval(contractor.id);
         this.queueStopNotice(contractor, input);
-        response = "Você não tem ponto aberto. Guardei este encerramento com seu horário original para recuperar um início atrasado. O dono pode revisar se faltou o início.";
+        response = say.stopNoClock;
       }
       else if (ms <= active.start_ms || this.overlaps(contractor.id, active.start_ms, ms, active.id)) {
-        response = this.clockConflict(contractor, input, "Esse encerramento cruza outro ponto ou vem antes do início.");
-      } else if (command.detail.length > 4000) response = "Envie os detalhes em até 4.000 caracteres.";
+        response = this.clockConflict(contractor, input, "stopCrosses");
+      } else if (command.detail.length > 4000) response = say.tooLong;
       else {
         response = this.finishClock(active, ms, command.detail, source);
       }
@@ -551,7 +637,7 @@ export class HoursLedger {
           const sources = [...before.inbox.map(row => String(row.source)), ...before.stops.map(row => String(row.source))];
           if (before.pending_start) sources.push(JSON.stringify([before.pending_start.source.line_uid, before.pending_start.source.chat_uid, before.pending_start.source.message_uid]));
           for (const key of sources) this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?) ON CONFLICT(source) DO UPDATE SET response=excluded.response")
-            .run(key, "O dono revisou e encerrou esta pendência; nenhuma hora foi acrescentada por esta mensagem.");
+            .run(key, RECEIPTS[this.contractor(input.contractor_id).language].ownerClosed);
           this.db.prepare("DELETE FROM pending_starts WHERE contractor_id=?").run(input.contractor_id);
           this.db.prepare("DELETE FROM unmatched_stops WHERE contractor_id=?").run(input.contractor_id);
           this.db.prepare("UPDATE clock_inbox SET complete=1, review_reason='', source_json=json_set(source_json, '$.body', '') WHERE contractor_id=?").run(input.contractor_id);
@@ -593,7 +679,7 @@ export class HoursLedger {
             this.db.prepare("UPDATE clock_inbox SET complete=1, review_reason='', source_json=json_set(source_json, '$.body', '') WHERE source=?").run(pendingSource);
           }
           this.db.prepare("UPDATE clock_inbox SET complete=1, review_reason='', source_json=json_set(source_json, '$.body', '') WHERE source=?").run(stop.source);
-          const confirmation = `O dono confirmou o início às ${localTime(start, timezone)}. Ponto encerrado às ${localTime(finish, timezone)}; ${hours(finish - start)} h registradas.`;
+          const confirmation = RECEIPTS[contractor.language].ownerConfirmed(clockTime(start, timezone, contractor.language), clockTime(finish, timezone, contractor.language), duration(finish - start));
           this.db.prepare("UPDATE receipts SET response=? WHERE source=?").run(confirmation, stop.source);
           if (pendingSource) this.db.prepare("UPDATE receipts SET response=? WHERE source=?").run(confirmation, pendingSource);
           this.bump(contractor.id);
@@ -622,10 +708,11 @@ export class HoursLedger {
           const oldRow = this.db.prepare("SELECT * FROM contractors WHERE id = ?").get(input.id);
           const before = oldRow ? contractorSchema.parse(oldRow) : undefined;
           if (before && (before.handle !== handle || before.chat_uid !== input.chat_uid)) throw new Error("A contractor's sender and thread binding cannot be reassigned.");
-          if (before?.active && before.name === input.name && before.timezone === input.timezone && before.rate_cents === input.rate_cents) return { contractor_id: input.id, registered: true };
-          this.db.prepare(`INSERT INTO contractors(id, name, handle, chat_uid, timezone, rate_cents) VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET name=excluded.name, timezone=excluded.timezone, rate_cents=excluded.rate_cents, active=1, revision=contractors.revision+1`)
-            .run(input.id, input.name, handle, input.chat_uid, input.timezone, input.rate_cents);
+          if (before?.active && before.name === input.name && before.timezone === input.timezone && before.rate_cents === input.rate_cents
+            && before.language === input.language) return { contractor_id: input.id, registered: true };
+          this.db.prepare(`INSERT INTO contractors(id, name, handle, chat_uid, timezone, rate_cents, language) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET name=excluded.name, timezone=excluded.timezone, rate_cents=excluded.rate_cents, language=excluded.language, active=1, revision=contractors.revision+1`)
+            .run(input.id, input.name, handle, input.chat_uid, input.timezone, input.rate_cents, input.language);
           this.audit(source, input.action, before, this.contractor(input.id));
           return { contractor_id: input.id, registered: true };
         }
@@ -672,7 +759,7 @@ export class HoursLedger {
           this.db.prepare(`UPDATE entries SET ${column}=1 WHERE id=?`).run(before.id);
           this.bump(before.contractor_id);
           this.audit(source, input.action, before, { contractor_id: before.contractor_id, entry_id: before.id, reason: input.reason, [column]: 1 });
-          if (input.action === "void") this.db.prepare("UPDATE receipts SET response='Esse registro foi anulado pelo dono; não conta nas horas.' WHERE source IN (?, ?)").run(before.start_message, before.stop_message);
+          if (input.action === "void") this.db.prepare("UPDATE receipts SET response=? WHERE source IN (?, ?)").run(RECEIPTS[this.contractor(before.contractor_id).language].voided, before.start_message, before.stop_message);
           return { entry_id: before.id, [column]: true, reason: input.reason };
         }
         case "manual": {

@@ -76,7 +76,7 @@ test("original message timestamps produce the requested seven columns and surviv
   const f = fixture(t);
   assert.match(f.clock("comecei landing", "2026-10-02T09:00:00-03:00") ?? "", /Ponto iniciado/);
   assert.equal(f.snapshot().total_hours, 0, "an open point never inflates payable hours");
-  assert.match(f.clock("parei commit abc123", "2026-10-02T11:30:00-03:00") ?? "", /2.5 h/);
+  assert.match(f.clock("parei commit abc123", "2026-10-02T11:30:00-03:00") ?? "", /Total: 2 h 30 min\./);
   f.restart();
   const result = f.snapshot();
   assert.equal(result.total_hours, 2.5);
@@ -116,14 +116,14 @@ test("a clarified start retains its first message time, rate and timezone across
   const f = fixture(t);
   const first = { line_uid: "line", chat_uid: "cht_ana", handle: "+15550000002", message_uid: "ambiguous",
     body: "Comecei a trabalhar agora.", created_at: "2026-10-02T09:00:00-03:00" };
-  assert.match(f.ledger.clock(first, { kind: "clarify_start" }) ?? "", /09:00:00/);
+  assert.match(f.ledger.clock(first, { kind: "clarify_start" }) ?? "", /09:00 BRT/);
   assert.equal(f.snapshot().entries.length, 0);
   f.ledger.manage({ ...f.contractor, rate_cents: 4000, timezone: "UTC" }, "changed-rate");
   f.restart();
   assert.equal(f.pendingStart(), first.created_at);
   const reply = { ...first, message_uid: "clarification", body: "Na landing.", created_at: "2026-10-02T09:10:00-03:00" };
   const confirmation = f.ledger.clock(reply, { kind: "confirm_start", detail: "landing" });
-  assert.match(confirmation ?? "", /09:00:00/);
+  assert.match(confirmation ?? "", /09:00 BRT/);
   const entry = f.snapshot().open_entry;
   assert.ok(entry);
   assert.equal(entry.start_ms, Date.parse(first.created_at));

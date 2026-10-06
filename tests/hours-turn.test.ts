@@ -123,7 +123,7 @@ test("optional clock shortcuts commit and confirm without any model or Mac call"
   assert.equal(posts.length, 2, JSON.stringify({ posts, logs }));
   assert.ok(posts.every(post => post.path === `/v1/chats/${group.uid}/messages`));
   assert.match(posts[0]?.body ?? "", /Ponto iniciado/);
-  assert.match(posts[1]?.body ?? "", /2.5 h/);
+  assert.match(posts[1]?.body ?? "", /Total: 2 h 30 min\./);
   assert.equal(ledger.report("ana")[0]?.total_hours, 2.5);
   assert.equal(ledger.report("ana")[0]?.entries.length, 1);
 });
