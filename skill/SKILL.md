@@ -59,6 +59,11 @@ telling the owner it is ready to track hours.
    Do not ask for a second confirmation of that same request.
    A reused=true receipt means no group or introduction was created. A creation
    conflict triggers a fresh lookup; do not retry creation blindly.
+   A rejected receipt with unresolved_group_conflict means setup remains incomplete.
+   Its cause is unknown; do not reinterpret it as proof that a group already exists.
+   Explain the platform could not connect the group. Do not ask the owner to find
+   chat IDs, forward a message, invite the bot or repeat a confirmed contact.
+   Do not promise a later retry or notification without a scheduled job.
    For a new group, the receipt confirms Plow accepted the request, with delivery unconfirmed.
    Say that plainly. A chat uid is not evidence the address has iMessage, the
    Apple group appeared or the introduction was received. Registration checks

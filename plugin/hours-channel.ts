@@ -25,7 +25,10 @@ export async function findContractorGroups(account: Account, ownerDm: Chat, hand
     groups.push({ chat_uid: current.uid, name: current.display_name ?? null,
       ...(contractor?.handle === normalizeHandle(handle) ? { contractor_id: contractor.id } : {}) });
   }
-  return { status: groups.length === 1 ? "found" : groups.length ? "ambiguous" : "not_found", groups };
+  return { status: groups.length === 1 ? "found" : groups.length ? "ambiguous" : "not_found", groups, lookup_scope: "this_bot",
+    ...(groups.length === 0 ? {
+      owner_message: "I can't access this contractor's group through Plow, so setup isn't complete.",
+      next_step: "This lookup covers only groups accessible to this bot. If creation was already rejected, or the owner says their group exists, translate owner_message into their language and send it alone, with no question, proposed workaround or technical details. Do not infer the cause, ask for identifiers or a different contact, or promise background repair. Only an explicit retry request authorizes another creation attempt after rejection. For fresh onboarding with no prior rejection or existing-group claim, proceed with plow_start_thread." } : {}) };
 }
 
 export const groupAttentionPrompt = `You are a quiet participant in a group, not the recipient of every message. Before replying or using tools, decide whether the latest message is intended for you, using its addressee, sender, reply target and recent conversation.

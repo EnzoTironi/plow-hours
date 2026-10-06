@@ -368,6 +368,32 @@ test("multiple matching groups require a choice and never create another group",
   await assert.rejects(() => tools("plow_start_thread").execute("ambiguous", introduction), /Several matching/);
 });
 
+test("an unresolved conflict is a blocked setup, not evidence of an existing group", async t => {
+  await websocketFixture(t);
+  const otherBotGroup = { ...group, participants: [owner, worker, { ...self, line: { uid: "another-bot" } }] };
+  let posts = 0;
+  let rejection = () => Response.json({ error: "Conflict" }, { status: 409 });
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    if (url.endsWith(home.uid)) return Response.json(home);
+    assert.ok(url.endsWith("/v1/chats"));
+    if (init.method === "POST") { posts++; return rejection(); }
+    return Response.json({ data: [home, otherBotGroup], has_more: false });
+  });
+  const result = z.object({ details: z.object({ request_status: z.literal("rejected"), registered: z.literal(false),
+    introduction_sent: z.literal(false), reason: z.literal("unresolved_group_conflict"), cause: z.literal("unknown"),
+    lookup_scope: z.literal("this_bot"), provider_error: z.object({ code: z.string().optional(), message: z.string().optional() }).optional() }).strict().extend({ next_step: z.string(), owner_message: z.string() }) });
+  const tool = ownerTools()("plow_start_thread");
+  const first = result.parse(await tool.execute("blocked", introduction));
+  assert.deepEqual(first.details.provider_error, { message: "Conflict" });
+  rejection = () => Response.json({ error: { code: "fixture_conflict", message: "Fixture refusal", extra: "Do not copy unrelated fields" } }, { status: 409 });
+  const second = result.parse(await tool.execute("structured-rejection", introduction));
+  assert.deepEqual(second.details.provider_error, { code: "fixture_conflict", message: "Fixture refusal" });
+  rejection = () => new Response("Invalid JSON error body", { status: 409 });
+  const third = result.parse(await tool.execute("malformed-rejection", introduction));
+  assert.equal(third.details.provider_error, undefined);
+  assert.equal(posts, 3, "Exactly one POST per explicit invocation; none automatically retried");
+});
+
 test("group lookup rejects wrong owner, agent, contact, trust, extra members and stale roster", async t => {
   await websocketFixture(t);
   const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line" };
