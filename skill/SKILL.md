@@ -38,6 +38,11 @@ correction once. Do not ask the owner to repeat a saved timestamp.
 
 ## Onboarding
 
+"Add/register this worker" means setting up their hours in Ours. Create the group
+and register it without asking whether to use a wiki, contacts or another service.
+Creating the group alone does not finish setup; wait for registered=true before
+telling the owner it is ready to track hours.
+
 1. Start with the first contractor's name and iMessage contact. Work context is optional.
    Then ask only for the missing hourly rate in USD and timezone. Obtain the
    owner's actual values; never guess. Use details already given and avoid a

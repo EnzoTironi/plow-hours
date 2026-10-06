@@ -23,7 +23,8 @@ entry=replaceOnce(entry,'        api.logger.info(`plow started thread chat=${cha
         const chat = parsed.data;
         api.logger.info(\`plow accepted thread request chat=\${chat.uid}\`);`);
 entry=replaceOnce(entry,'        const result = { chat_uid: chat.uid, message_sent: true };',`        const result = { chat_uid: chat.uid, request_status: "accepted", delivery_status: "unconfirmed",
-          note: "Plow accepted the group and introduction request. This does not confirm iMessage availability, group visibility or receipt by any participant." };`);
+          note: "Plow accepted the group and introduction request. This does not confirm iMessage availability, group visibility or receipt by any participant.",
+          ...(hoursEnabled() ? { next_step: "The group is not registered for hours yet. Complete this onboarding now with plow_hours(action=contractor), using this chat_uid and the owner's supplied name, contact, rate and timezone. Only a registered=true receipt makes it ready for clocks." } : {}) };`);
 entry=replaceOnce(entry,'        const details = { message_uid: messageUid };',`        const details = { message_uid: messageUid, request_status: "accepted", delivery_status: "unconfirmed",
           note: "Plow accepted the message request. This is not an iMessage delivery or read receipt.",
           reply_instruction: "If this answered a public request originating in a group, finish with exactly NO_REPLY. Do not send a private confirmation, summary or duplicate of the public answer. If this was only a status notice that you will answer privately, continue executing the request and give the actual private answer." };`);
