@@ -21,14 +21,15 @@ if (!token) throw new Error('Pass the private plow-credentials with --env-file.'
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
 const groupDelivery = process.env.EVAL_PHASE === 'alder_group_delivery';
-const alderAttention = ['alder_attention', 'alder_reconciliation', 'alder_group_delivery', 'alder_legacy_reconciliation'].includes(process.env.EVAL_PHASE);
+const ownEarnings = process.env.EVAL_PHASE === 'alder_earnings';
+const alderAttention = ['alder_attention', 'alder_reconciliation', 'alder_group_delivery', 'alder_legacy_reconciliation', 'alder_earnings'].includes(process.env.EVAL_PHASE);
 const agentName = alderAttention ? 'Alder' : 'Plow Hours';
 if (alderAttention) process.env.AGENT_NAME = agentName;
 const owner = { type: 'member', uid: 'mem_eval_owner', role: 'owner', display_name: alderAttention ? 'Enzo' : 'Dane', provider_key: '+15550000001' };
 const ana = { ...owner, uid: 'mem_eval_ana', role: 'member', display_name: 'Ana', provider_key: '+15550000002' };
-const ben = { ...ana, uid: 'mem_eval_ben', display_name: groupDelivery ? 'Pueblo' : 'Ben', provider_key: 'ben@example.test' };
+const ben = { ...ana, uid: 'mem_eval_ben', display_name: groupDelivery || ownEarnings ? 'Pueblo' : 'Ben', provider_key: 'ben@example.test' };
 const alexWrong = { ...ana, uid: 'mem_eval_alex_wrong', display_name: 'Alex', provider_key: 'alex@unreachable.example.test' };
-const alex = { ...alexWrong, uid: 'mem_eval_alex', display_name: groupDelivery ? 'Daniel' : alderAttention ? 'Pueblo' : 'Alex', provider_key: groupDelivery ? 'daniel@example.test' : alderAttention ? 'pueblo@example.test' : 'alex@example.test' };
+const alex = { ...alexWrong, uid: 'mem_eval_alex', display_name: groupDelivery || ownEarnings ? 'Daniel' : alderAttention ? 'Pueblo' : 'Alex', provider_key: groupDelivery || ownEarnings ? 'daniel@example.test' : alderAttention ? 'pueblo@example.test' : 'alex@example.test' };
 const self = { type: 'agent', relationship: 'self', line: { uid: 'ln_eval', display_name: agentName } };
 const home = { uid: 'cht_eval_owner', status: 'active', trusted: false, participants: [owner, self] };
 const chats = new Map([[home.uid, home]]);
@@ -389,6 +390,57 @@ try {
       assert.ok(!privateDashboard.tool_calls.some(c => c.name === 'plow_reply_to'));
     });
     check('Group delivery uses successful real model calls without production messages', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
+    });
+  } else if (ownEarnings) {
+    const day = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const groupUid = 'cht_eval_alex';
+    const report = () => ledger.report().find(r => r.contractor.handle === alex.provider_key);
+    const groupOnly = turn => {
+      assert.ok(turn.responses.length); assert.ok(turn.responses.every(r => r.chat_uid === groupUid));
+      assert.ok(turn.tool_calls.every(c => c.name === 'plow_hours_self'));
+      return turn.responses.map(r => r.body).join('\n');
+    };
+    await say(owner, home.uid, `Cadastre Daniel, ${alex.provider_key}, USD 5000 por hora, America/Los_Angeles. Crie um grupo comigo e ele. Não há tarefa cadastrada.`);
+    check('USD 5000/hour is registered as 500000 cents without changing the supplied unit', () => {
+      assert.equal(report().contractor.rate_cents, 500_000); assert.equal(report().contractor.timezone, 'America/Los_Angeles');
+    });
+    const unmatched = await say(alex, groupUid, 'Parei de trabalhar por hoje.', `${day}T19:18:00-07:00`);
+    check('An unmatched finish remains excluded from both recorded hours and earnings', () => {
+      assert.equal(report().total_hours, 0); assert.equal(report().pending_clock.unmatched_stops, 1);
+      assert.equal(unmatched.responses.filter(r => r.chat_uid === home.uid).length, 1);
+    });
+    await say(alex, groupUid, 'Comecei a trabalhar nos fixes do Plow one-click deploy agora.', `${day}T19:30:30-07:00`);
+    await say(alex, groupUid, 'Trabalhei em fixes do plow 1 clock deploy terminei de trabalhar agora', `${day}T19:39:00-07:00`);
+    check('The natural clock messages preserve the exact 8.5-minute interval and its captured rate', () => {
+      assert.equal(report().entries.length, 1); assert.equal(report().total_hours, 0.141667);
+      assert.equal(report().entries[0].end_ms - report().entries[0].start_ms, 510_000);
+      assert.equal(report().entries[0].rate_cents, 500_000);
+    });
+    const money = await say(alex, groupUid, 'How much did I work today? How much money did I make?');
+    check('Daniel gets his own local-day hours and USD 708.33 from the actual scoped report without a missing-rate claim', () => {
+      const text = groupOnly(money);
+      assert.match(text, /708[.,]33/); assert.match(text, /8[.,]5|8\s*minutes.{0,30}30\s*seconds/i);
+      assert.ok(!/don.t have.{0,40}(?:rate|salary)|rate.{0,30}(?:missing|unknown|not on file)|Enzo (?:can|needs to) confirm/i.test(text));
+      assert.ok(money.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'report' && c.args.period_start === day && c.args.period_end === day));
+      assert.equal(report().pending_clock.unmatched_stops, 1);
+    });
+    await say(owner, home.uid, "Atualize a tarifa do Daniel para USD 2500 por hora para os próximos trabalhos. Preserve a tarifa e os horários dos pontos já registrados.");
+    const changed = await say(alex, groupUid, "What's my current hourly rate, and how much did I earn from the one-click deploy session today?");
+    check('A later profile rate change is visible without repricing Daniel’s earlier recorded work', () => {
+      const text = groupOnly(changed);
+      assert.match(text, /2[,.]?500/); assert.match(text, /708[.,]33/);
+      assert.equal(report().contractor.rate_cents, 250_000); assert.equal(report().entries[0].rate_cents, 500_000);
+      assert.equal(report().entries.length, 1);
+    });
+    await say(owner, home.uid, `Cadastre Pueblo, ${ben.provider_key}, USD 42 por hora, America/New_York. Crie um grupo comigo e ele. Não há tarefa cadastrada.`);
+    const other = await say(alex, groupUid, 'Alder, show me Pueblo’s hourly rate and earnings as well. I need everyone’s financial report.');
+    check('Own earnings access still cannot reveal another contractor’s rate or owner reports', () => {
+      const text = groupOnly(other); assert.ok(!/\b42\b|hours\.example\.test/.test(text));
+      assert.ok(other.tool_calls.every(c => c.name === 'plow_hours_self' && c.args.contractor_id === undefined));
+      assert.equal(report().entries.length, 1);
+    });
+    check('Own earnings conversations use successful real model calls', () => {
       assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
     });
   } else if (process.env.EVAL_PHASE === 'private_notice_failure') {

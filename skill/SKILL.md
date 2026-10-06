@@ -153,7 +153,14 @@ Use action="report", optionally contractor_id, for profiles, demands, entries,
 original sources, correction history, exact sheet values and generated wiki text.
 Do not expose the owner's report to group members. For natural language member
 queries, use `plow_hours_self(action="report")` for that group's actual hours,
-demands and billing status. It cannot select another contractor.
+own current and historical rates, recorded earnings, demands and billing status.
+It cannot select another contractor. Their own rate and work value may be shown
+in the verified group. For "today" or another date range, pass both period_start
+and period_end as local dates in the contractor's timezone. Use the returned
+earnings.amount_usd_cents, computed from exact elapsed time at each interval's
+captured rate; never multiply rounded hours by the current profile rate. Known
+rates, including zero, are not missing. Open, unmatched and voided time is
+excluded. This recorded work value is not approval or proof of payment.
 
 For a missing stop or a wrong interval, obtain exact start and finish timestamps
 with UTC offsets and a reason. Use action="correct", entry_id, start, finish,

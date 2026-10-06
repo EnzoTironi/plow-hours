@@ -66,10 +66,18 @@ billing stay with their original sender.
 | Access | Owner, in the private conversation | Contractor, in their own group |
 | --- | --- | --- |
 | Hours and assigned work | All contractors | Their own records only |
+| Rates and recorded earnings | All contractors | Their own current rate and work value, including date ranges |
 | Clocking and work notes | Reviews records; can correct missed work | Starts, pauses, switches and finishes their own work |
 | Rates, tasks and corrections | Sets rates, assigns work and makes corrections with a reason | Cannot change rates or correct recorded intervals |
 | Dashboard | Receives the private hours dashboard link | No owner dashboard access |
 | Billing | Requests paperwork, closes periods and approves after review | Submits their invoice and requested document references |
+
+Ask "How much did I work today, and how much did I earn?" in your group. The
+agent uses the saved hourly rate and exact recorded time for that local date.
+Each interval keeps the rate it started with, even if the owner changes the
+current rate. Open clocks, unmatched records and voided entries are excluded.
+The amount is the value of recorded work; payment and billing approval remain
+separate.
 
 Contractors use the agent through their registered group. Administration happens
 in the owner's private conversation. If the owner asks for a report, dashboard
