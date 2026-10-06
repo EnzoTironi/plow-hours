@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { test } from "node:test";
+import { z } from "zod";
+import { renderConfig, syncConfig } from "../boot/config.ts";
+import { websocketFixture } from "./ws-fixture.ts";
+
+const flash = "plow/z-ai/glm-5.3-flash";
+const legacy = "plow/z-ai/glm-5.2";
+const model = z.union([z.string(), z.object({ primary: z.string(), fallbacks: z.array(z.string()).optional() })]);
+const savedConfig = z.object({ agents: z.object({
+  defaults: z.object({ model, workspace: z.string() }),
+  entries: z.object({ main: z.object({ model: model.optional() }) }),
+}) });
+function render() {
+  return renderConfig({ owner_uid: "owner-account", line: { uid: "line" }, agent: { name: "Ours" }, chats: [] }, "http://fixture", "untrusted");
+}
+
+test("a new installation boots with the Plow GLM 5.3 Flash catalog and default", async t => {
+  await websocketFixture(t);
+  const config = render();
+  const root = process.env.OPENCLAW_STATE_DIR;
+  assert.ok(root);
+  const path = join(root, "openclaw.json");
+  await syncConfig(config, path, join(root, "includes"));
+  const saved = savedConfig.parse(JSON.parse(await readFile(path, "utf8")));
+  assert.equal(config.models.providers.plow.models[0].id, "z-ai/glm-5.3-flash");
+  assert.equal(config.models.providers.plow.models[0].reasoning, true);
+  assert.deepEqual(saved.agents.defaults.model, { primary: flash, fallbacks: ["plow/anthropic/claude-sonnet-5"] });
+});
+
+for (const selection of [
+  { name: "legacy object", before: { primary: legacy, fallbacks: ["custom/fallback"] }, after: { primary: flash, fallbacks: ["custom/fallback"] } },
+  { name: "legacy string", before: legacy, after: flash },
+  { name: "another explicit model", before: { primary: "openai/custom", fallbacks: ["custom/fallback"] }, after: { primary: "openai/custom", fallbacks: ["custom/fallback"] } },
+  { name: "already migrated", before: flash, after: flash },
+]) {
+  test(`updating ${selection.name} preserves owner settings and is repeatable`, async t => {
+    await websocketFixture(t);
+    const root = process.env.OPENCLAW_STATE_DIR;
+    assert.ok(root);
+    const path = join(root, "openclaw.json"), includes = join(root, "includes");
+    await writeFile(path, JSON.stringify({ agents: {
+      defaults: { model: selection.before, workspace: "/owner/workspace" },
+      entries: { main: { model: selection.before } },
+    } }));
+    await syncConfig(render(), path, includes);
+    const saved = savedConfig.parse(JSON.parse(await readFile(path, "utf8")));
+    assert.deepEqual(saved.agents.defaults.model, selection.after);
+    assert.deepEqual(saved.agents.entries.main.model, selection.after);
+    assert.equal(saved.agents.defaults.workspace, "/owner/workspace");
+    const first = await readFile(path, "utf8");
+    await syncConfig(render(), path, includes);
+    assert.equal(await readFile(path, "utf8"), first);
+  });
+}
