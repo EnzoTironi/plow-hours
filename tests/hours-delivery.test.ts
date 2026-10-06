@@ -67,8 +67,11 @@ test("an owner group turn keeps the original people and conversation facts while
     from: z.string(), route: z.object({ sessionKey: z.string() }),
     conversation: z.object({ kind: z.string(), id: z.string(), nativeChannelId: z.string(), label: z.string() }),
     reply: z.object({ to: z.string(), nativeChannelId: z.string() }),
+    message: z.object({ rawBody: z.string() }),
     supplemental: z.object({ channelStructuredContext: z.array(z.object({ payload: z.object({
       participants: z.array(z.object({ name: z.string(), type: z.string(), role: z.string() })),
+      message_origin: z.object({ kind: z.string(), chat_uid: z.string() }),
+      final_reply_destination: z.object({ kind: z.string(), chat_uid: z.string() }),
     }) })) }),
   });
   let seen: z.infer<typeof contextSchema> | undefined;
@@ -96,6 +99,11 @@ test("an owner group turn keeps the original people and conversation facts while
   assert.equal(seen.from, `plow:group:${source.uid}`);
   assert.equal(seen.conversation.kind, "group"); assert.equal(seen.conversation.id, source.uid);
   assert.equal(seen.conversation.label, source.display_name);
+  assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.message_origin, { kind: "group", chat_uid: source.uid });
+  assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.final_reply_destination, { kind: "direct", chat_uid: destination.uid });
+  assert.ok(seen.message.rawBody.includes(source.uid));
+  assert.match(seen.message.rawBody, /Message origin:.*"kind":"group"/);
+  assert.ok(seen.message.rawBody.endsWith("Pueblo, consegue registrar seu trabalho a partir de agora por aqui?"));
   assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.participants.map(p => p.name), ["Enzo", "Pueblo", "Alder"]);
   assert.equal(seen.route.sessionKey, "agent:main:main");
   assert.equal(seen.conversation.nativeChannelId, destination.uid);

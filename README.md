@@ -76,6 +76,10 @@ in the owner's private conversation. If the owner asks for a report, dashboard
 or administrative action in a group, the agent handles it in their private
 session and replies in their DM. Private results stay out of the contractor's
 conversation and agent history. Human conversation still gets no interruption.
+Public guidance for a contractor goes to their group. The owner can ask for it
+in that group or privately, and the agent sends it to the intended conversation.
+Group messages keep their original chat identity even when private tools process
+them, so the agent can distinguish where a request arrived from where it replied.
 Live clock reports belong to the worker. The owner can correct their records,
 including a missed start, without asking the worker to repeat the clock. If the
 worker already sent a finish, the agent uses that saved timestamp and its captured
