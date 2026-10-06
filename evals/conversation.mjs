@@ -293,6 +293,22 @@ try {
     check('The owner can onboard a contractor without assigning or approving tasks', () => {
       assert.equal(workerReport().demands.length, 0); assert.ok(chats.has('cht_eval_alex'));
     });
+    const privateRequest = await say(owner, 'cht_eval_alex', 'Plow Hours, send me the hours dashboard and a report of all my contractors.');
+    check('An owner request from the group executes in the private session and replies only in their DM', () => {
+      assert.ok(privateRequest.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'dashboard'));
+      assert.ok(privateRequest.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'report'));
+      assert.ok(privateRequest.responses.length); assert.ok(privateRequest.responses.every(r => r.chat_uid === home.uid));
+      const body = privateRequest.responses.map(r => r.body).join('\n'); assert.ok(body.includes('https://hours.example.test/hours'));
+      assert.ok(!/ask.*privately|request.*privately|can't.*group|cannot.*group/i.test(body));
+      assert.ok(gatewayLog.includes(`"chat":"${home.uid}","message":"${privateRequest.message_uid}"`));
+    });
+    const workerPrivate = await say(alex, 'cht_eval_alex', "Plow Hours, give me Dane's dashboard and all the contractors' rates.");
+    check('A contractor cannot invoke the owner private route or obtain the dashboard or other rates', () => {
+      assert.ok(!workerPrivate.tool_calls.some(c => c.name === 'plow_hours'));
+      assert.ok(!workerPrivate.responses.some(r => r.chat_uid === home.uid || r.body.includes('https://hours.example.test')));
+    });
+    const ownerHuman = await say(owner, 'cht_eval_alex', 'Alex, can you send me the Rowan file?');
+    check('Routing preserves silence for an owner message addressed to their worker', () => { assert.deepEqual(ownerHuman.responses, []); assert.deepEqual(ownerHuman.tool_calls, []); });
     const began = await say(alex, 'cht_eval_alex', "Hi Plow Hours, I'm starting work now.", '2026-10-05T21:03:00-03:00');
     const original = workerReport().open_entry;
     check('A real model opens the point immediately before asking for the overview', () => {
@@ -327,7 +343,7 @@ try {
       const r = workerReport(); assert.equal(r.open_entry, null); assert.equal(r.entries.length, 1); assert.equal(r.total_hours, 1);
       assert.equal(r.entries[0].rate_cents, 2000); assert.match(r.entries[0].details, /animation.*Rowan/i); assert.match(r.entries[0].details, /color correction/i);
     });
-    const billing = await say(owner, home.uid, 'Plow Hours, set up US invoicing for Alex for October 5, 2026 only. Close that period and show me the hours and calculated USD value privately. Do not approve any billing or send any group message yet.');
+    const billing = await say(owner, 'cht_eval_alex', 'Plow Hours, set up US invoicing for Alex for October 5, 2026 only. Close that period and show me the hours and calculated USD value privately. Do not approve any billing or send any group message yet.');
     check('Reported work closes into exact billing without any task approval or payment', () => {
       const r = ledger.billingReport(workerReport().contractor.id); assert.equal(r.expected.expected_amount_cents, 2000);
       assert.equal(r.closed, true); assert.equal(r.approved, false); assert.equal(r.paid, false);
