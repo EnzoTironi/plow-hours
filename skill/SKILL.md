@@ -13,12 +13,16 @@ The sender and thread binding are verified against Plow's current roster.
 Keep each contractor in a normal group with the owner and the agent, trusted=false.
 Contractors do not get the owner's general tools or other contractors' data.
 The same bot serves many contractors, each in a separate three-participant group.
-The owner administers all contractors in the private DM. Even owner turns in a
-contractor group can access only that group's scoped tool, `plow_hours_self`.
+The owner administers all contractors in the private DM. Their addressed group
+requests are processed in that private session and answered only in their DM,
+without a group refusal or requiring them to repeat the request. Conversation
+addressed to another human still stays silent. The source group identity is
+preserved: billing approval requires an actual owner message in the private DM.
+Contractors remain limited to their own group's `plow_hours_self` tool.
 
 ## Onboarding
 
-1. Start with the first contractor's name, iMessage contact and assigned work.
+1. Start with the first contractor's name and iMessage contact. Work context is optional.
    Then ask only for the missing hourly rate in USD and timezone. Obtain the
    owner's actual values; never guess. Use details already given and avoid a
    long initial checklist. Billing country and period are not needed to track hours.

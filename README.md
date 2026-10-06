@@ -72,9 +72,12 @@ billing stay with their original sender.
 | Billing | Requests paperwork, closes periods and approves after review | Submits their invoice and requested document references |
 
 Contractors use the agent through their registered group. Administration happens
-in the owner's private conversation. Even the owner's messages inside a
-contractor group can only read that contractor's report; they cannot clock on
-the worker's behalf or administer other people from there.
+in the owner's private conversation. If the owner asks for a report, dashboard
+or administrative action in a group, the agent handles it in their private
+session and replies in their DM. Private results stay out of the contractor's
+conversation and agent history. Human conversation still gets no interruption.
+The owner cannot clock on a worker's behalf in the group. Billing approval
+requires their review and an actual approval message in the private conversation.
 
 The tools check the live participants before accessing records. A group must
 contain exactly the owner, the registered contractor and the agent, with normal

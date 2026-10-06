@@ -31,7 +31,14 @@ entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(a
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
-entry='import { z } from "zod";\nimport { clockHours, contractorGroupPrompt, hoursGroup, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\n'+entry;
+entry='import { z } from "zod";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { workText } from "./hours-period.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\n'+entry;
+entry=replaceOnce(entry,'ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {','ingress: TurnIngress, log: (text: string) => void, ownerGroup?: Chat): Promise<TurnOutcome> {');
+const kindLine='  const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";';
+const inboundKind = kindLine+'\n  const peer = { kind, id:';
+entry=replaceOnce(entry,inboundKind,kindLine+`\n  if (hoursEnabled() && account.accountId === "chat" && senderIsOwner && kind === "group") {
+    const destination = await ownerPrivateConversation(account, chat, message);
+    return receive(account, cfg, destination.chat, { ...message, sender: destination.sender }, firstContact, history, ingress, log, chat);
+  }\n  const peer = { kind, id:`);
 const route='  const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });';
 entry=replaceOnce(entry,route,route+`\n  const confirmation = clockHours({ account, chat, message, senderIsOwner });
   if (confirmation !== undefined) {
@@ -62,16 +69,17 @@ entry=replaceOnce(entry,turnLog,`  if (hoursContractor && sender.type === "membe
 ${turnLog}`);
 entry=replaceOnce(entry,turnLog,`  if (hoursEnabled() && account.accountId === "chat" && senderIsOwner && kind === "direct" && sender.type === "member") {
     ctxPayload.GatewayRunToolBindings = { plowHoursOwner: {
-      line_uid: account.lineUid, chat_uid: chat.uid, handle: sender.provider_key,
+      line_uid: account.lineUid, chat_uid: ownerGroup?.uid ?? chat.uid, handle: sender.provider_key,
       message_uid: message.uid, created_at: message.created_at, body: message.body,
     } };
   }
 ${turnLog}`);
+entry=replaceOnce(entry,'conversation: { kind, id: chat.uid,','conversation: { kind: ownerGroup ? "group" : kind, id: chat.uid,');
 entry=replaceOnce(entry,'  const body = message.body ||', '  const body = (hoursRestricted ? workText(message.body) : message.body) ||');
 entry=replaceOnce(entry,'      body: m.body, timestamp:', '      body: hoursRestricted ? workText(m.body) : m.body, timestamp:');
 entry=replaceOnce(entry,'body: message.reply_to.body, sender:', 'body: hoursRestricted ? workText(message.reply_to.body) : message.reply_to.body, sender:');
 const prompt='      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),';
-entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdoptionLifecycle: ingress,\n      ...(hoursRestricted && kind === "group" ? { suppressTyping: true } : {}),');
+entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdoptionLifecycle: ingress,\n      ...(ownerGroup || hoursRestricted && kind === "group" ? { suppressTyping: true } : {}),');
 const preparePayload='      preparePayload: (payload, info) => {';
 entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursRestricted && payload.isError) {
           failure = new Error("Contractor turn could not complete");
@@ -80,7 +88,23 @@ entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursRestri
         }`);
 entry=replaceOnce(entry,prompt,prompt+`\n      ...(hoursRestricted ? { groupSystemPrompt: hoursContractor
         ? contractorGroupPrompt(hoursContractor.id)
-        : unavailableGroupPrompt(chat, kind === "group") } : {}),`);
+        : unavailableGroupPrompt(chat, kind === "group") } : {}),
+      ...(ownerGroup ? { groupSystemPrompt: ownerGroupPrompt(ownerGroup) } : {}),`);
+entry=replaceOnce(entry,'if (payload.isFallbackNotice) { silent ||= email;', 'if (payload.isFallbackNotice) { silent ||= email || !!ownerGroup;');
+entry=replaceOnce(entry,'      deliver: async payload => {',`      deliver: async payload => {
+        if (ownerGroup) {
+          const text = (payload.text ?? "").split("\\n").filter(line => line.trim() !== "NO_REPLY").join("\\n").trim();
+          if (!text || (!payload.isError && text.startsWith(NO_REPLY_FALLBACK))) {
+            silent = true;
+            return { messageIds: [] };
+          }
+          const target = await ownerPrivateConversation(account, ownerGroup, { ...message,
+            sender: ownerGroup.participants.find(p => p.type === "member" && p.role === "owner") ?? message.sender });
+          if (target.chat.uid !== chat.uid) throw new Error("The private owner destination changed during the turn.");
+          const sent = await send(account, target.chat.uid, text, payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
+          deliveredToOwner = true;
+          return { messageIds: [sent.messageId] };
+        }`);
 entry=replaceOnce(entry,'...(!email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),','...(hoursRestricted ? { disableTools: !hoursContractor } : !email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),');
 entry=replaceOnce(entry,'if (api.registrationMode === "full") api.logger.info("plow channel registered");',`if (api.registrationMode === "full") {
       registerHoursWeb(api);

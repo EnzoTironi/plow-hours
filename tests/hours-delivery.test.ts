@@ -5,6 +5,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import entry from "../plugin/index.ts";
 import { hoursLedger } from "../plugin/hours.ts";
+import { ownerPrivateConversation } from "../plugin/hours-channel.ts";
 import { DeliveryUnknownError, HttpError } from "../plugin/transport.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
@@ -15,6 +16,30 @@ const self = { type: "agent", relationship: "self", line: { uid: "line" } };
 const home = { uid: "cht_home", status: "active", trusted: false, participants: [owner, self] };
 const group = { uid: "cht_alex", status: "active", trusted: false, participants: [owner, worker, self] };
 const introduction = { members: [worker.provider_key], body: "Hi Alex, Dane asked me to track your hours.", trusted: false };
+
+test("private routing binds the actual group owner to their live DM, rejecting workers and changed identities", async t => {
+  await websocketFixture(t);
+  const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line" };
+  let current = group, privateChat = home;
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith(group.uid)) return Response.json(current);
+    if (url.endsWith(home.uid)) return Response.json(privateChat);
+    if (url.endsWith("/v1/chats")) return Response.json({ data: [privateChat, current], has_more: false });
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const message = { uid: "owner-group-request", sender: owner, direction: "inbound", body: "Plow Hours, send me the dashboard.", created_at: "2026-10-05T21:00:00Z", attachments: [] };
+  const destination = await ownerPrivateConversation(account, group, message);
+  assert.equal(destination.chat.uid, home.uid); assert.deepEqual(destination.sender, owner);
+  await assert.rejects(() => ownerPrivateConversation(account, group, { ...message, sender: worker }), /verified owner/);
+  await assert.rejects(() => ownerPrivateConversation(account, group, { ...message, sender: { ...worker, role: "owner" } }), /verified owner/);
+  current = { ...group, participants: [self, { ...owner, role: "member" }, worker] };
+  await assert.rejects(() => ownerPrivateConversation(account, group, message), /verified owner/);
+  current = group;
+  privateChat = { ...home, participants: [self, { ...owner, provider_key: "+15550000999" }] };
+  await assert.rejects(() => ownerPrivateConversation(account, group, message), /private destination/);
+  privateChat = { ...home, participants: [{ ...self, line: { uid: "another-line" } }, owner] };
+  await assert.rejects(() => ownerPrivateConversation(account, group, message), /owner/);
+});
 
 function ownerTools(senderIsOwner = true) {
   const tools = new Map<string, Tool>();
