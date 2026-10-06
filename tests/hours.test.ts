@@ -25,6 +25,53 @@ function fixture(t: TestContext) {
   };
 }
 
+test("a contractor sees their own recorded value at USD 5000 per hour, with captured rates and no unmatched or other-worker hours", t => {
+  const f = fixture(t);
+  f.ledger.manage({ ...f.contractor, rate_cents: 500_000, timezone: "America/Los_Angeles" }, "high-rate");
+  f.clock("parei", "2026-10-05T19:18:00-07:00");
+  f.clock("comecei landing", "2026-10-05T19:30:30-07:00");
+  f.ledger.manage({ ...f.contractor, rate_cents: 250_000, timezone: "America/Los_Angeles" }, "new-rate");
+  f.clock("parei Fixes to one-click deploy", "2026-10-05T19:39:00-07:00");
+  f.ledger.manage({ ...f.contractor, id: "ben", name: "Other Worker", handle: "+15550000003", chat_uid: "cht_ben", rate_cents: 77_777 }, "other-profile");
+  f.ledger.manage({ action: "demand", id: "private", contractor_id: "ben", project: "Other project", summary: "Other work" }, "other-work");
+  f.ledger.manage({ action: "manual", contractor_id: "ben", demand_id: "private", start: "2026-10-05T19:00:00-07:00", finish: "2026-10-05T20:00:00-07:00", rate_cents: 77_777, reason: "Other worker's confirmed interval" }, "other-hours");
+  f.restart();
+  const schema = z.object({ contractor: z.object({ rate_cents: z.number() }), total_hours: z.number(),
+    earnings: z.object({ amount_usd_cents: z.number(), duration_ms: z.number() }),
+    entries: z.array(z.object({ rate_cents: z.number() })), pending_clock: z.object({ unmatched_stops: z.number() }) });
+  const raw = f.ledger.self({ action: "report", period_start: "2026-10-05", period_end: "2026-10-05" }, "ana", "earnings");
+  const report = schema.parse(raw);
+  assert.equal(report.contractor.rate_cents, 250_000); assert.equal(report.entries[0]?.rate_cents, 500_000);
+  assert.equal(report.total_hours, 8.5 / 60); assert.equal(report.earnings.duration_ms, 510_000);
+  assert.equal(report.earnings.amount_usd_cents, 70_833);
+  assert.equal(report.pending_clock.unmatched_stops, 1); assert.equal(report.entries.length, 1);
+  assert.doesNotMatch(JSON.stringify(raw), /Other Worker|Other project|77777/);
+  assert.throws(() => f.ledger.self({ action: "report", contractor_id: "ben" }, "ana", "other"));
+  f.ledger.manage({ ...f.contractor, rate_cents: 0, timezone: "America/Los_Angeles" }, "zero-rate");
+  f.clock("comecei landing", "2026-10-05T20:00:00-07:00"); f.clock("parei", "2026-10-05T20:01:00-07:00");
+  const zero = schema.parse(f.ledger.self({ action: "report" }, "ana", "known-zero"));
+  assert.equal(zero.contractor.rate_cents, 0); assert.equal(zero.entries[1]?.rate_cents, 0);
+  assert.equal(zero.earnings.amount_usd_cents, 70_833); assert.equal(zero.earnings.duration_ms, 570_000);
+});
+
+test("a member date report clips midnight at their timezone and rounds money once while excluding voided and open time", t => {
+  const f = fixture(t);
+  f.ledger.manage({ ...f.contractor, rate_cents: 100, timezone: "America/Los_Angeles" }, "one-dollar");
+  f.clock("comecei landing", "2026-10-04T23:59:50-07:00"); f.clock("parei", "2026-10-05T00:00:10-07:00");
+  f.clock("comecei landing", "2026-10-05T00:01:00-07:00"); f.clock("parei", "2026-10-05T00:01:20-07:00");
+  f.clock("comecei landing", "2026-10-05T01:00:00-07:00"); f.clock("parei", "2026-10-05T02:00:00-07:00");
+  const mistake = f.snapshot().entries.at(-1); assert.ok(mistake);
+  f.ledger.manage({ action: "void", entry_id: mistake.id, reason: "Accidental clock" }, "void");
+  f.clock("comecei landing", "2026-10-05T03:00:00-07:00");
+  const report = z.object({ total_hours: z.number(), earnings: z.object({ amount_usd_cents: z.number(), duration_ms: z.number(), timezone: z.string() }) })
+    .parse(f.ledger.self({ action: "report", period_start: "2026-10-05", period_end: "2026-10-05" }, "ana", "local-day"));
+  assert.equal(report.earnings.timezone, "America/Los_Angeles");
+  assert.equal(report.earnings.duration_ms, 30_000); assert.equal(report.total_hours, 30 / 3600);
+  assert.equal(report.earnings.amount_usd_cents, 1);
+  assert.throws(() => f.ledger.self({ action: "report", period_start: "2026-10-05" }, "ana", "partial-period"), /both/);
+  assert.throws(() => f.ledger.self({ action: "report", period_start: "2026-10-06", period_end: "2026-10-05" }, "ana", "backwards-period"), /before/);
+});
+
 test("original message timestamps produce the requested seven columns and survive restart", t => {
   const f = fixture(t);
   assert.match(f.clock("comecei landing", "2026-10-02T09:00:00-03:00") ?? "", /Ponto iniciado/);

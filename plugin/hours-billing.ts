@@ -41,7 +41,7 @@ export const billingSubmissionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("tax_document"), url: link }).strict(),
 ]);
 export const selfSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("report") }).strict(),
+  z.object({ action: z.literal("report"), period_start: date.optional(), period_end: date.optional() }).strict(),
   z.object({ action: z.literal("start"), demand_id: contractorId.optional(), details: z.string().max(4000).default(""), project: text.optional() }).strict(),
   z.object({ action: z.literal("switch"), demand_id: contractorId, details: z.string().max(4000).default("") }).strict(),
   z.object({ action: z.literal("clarify_start") }).strict(),
