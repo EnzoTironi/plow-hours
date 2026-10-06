@@ -35,7 +35,7 @@ export const managementSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("contractor"), id, name: text, handle: text, chat_uid: text.describe("Required contractor group containing the owner, this agent and exactly this worker. Use the chat_uid returned by plow_start_thread, never the owner DM."), timezone: text, rate_cents: z.number().int().min(0).max(100_000_000),
     language: z.enum(["en", "pt"]).default("pt") }).strict(),
   z.object({ action: z.literal("demand"), id, contractor_id: id, project: text, summary: text, references: z.string().max(4000).default("") }).strict(),
-  z.object({ action: z.literal("correct"), entry_id: text, start: timestamp, finish: timestamp, reason: text, demand_id: id.optional() }).strict(),
+  z.object({ action: z.literal("correct"), entry_id: text, start: timestamp.optional().describe("Correct the start in place. For an open clock, omit finish to keep it running."), finish: timestamp.optional().describe("Omit to preserve the current finish, including an open clock."), reason: text, demand_id: id.optional(), restore: z.boolean().optional().describe("True only when the owner authorizes restoring an accidentally voided entry. Restores and corrects atomically.") }).strict(),
   z.object({ action: z.literal("void"), entry_id: text, reason: text }).strict(),
   z.object({ action: z.literal("review_entry"), entry_id: text, reason: text }).strict(),
   z.object({ action: z.literal("resolve_clock"), contractor_id: id, reason: text }).strict(),
@@ -737,18 +737,27 @@ export class HoursLedger {
           const row = this.db.prepare("SELECT * FROM entries WHERE id = ?").get(input.entry_id);
           if (!row) throw new Error("Time entry is not registered.");
           const before = entrySchema.parse(row);
-          if (before.voided) throw new Error("A voided entry cannot be corrected. Record a new manual entry with a reason.");
-          const start = Date.parse(input.start), finish = Date.parse(input.finish);
-          if (finish <= start) throw new Error("Finish must be after start.");
+          if (before.voided && !input.restore) throw new Error("Use correct with restore=true only when the owner authorizes restoring this voided entry.");
+          if (!input.start && !input.finish && !input.demand_id && !input.restore) throw new Error("Specify the correction to apply.");
+          const start = input.start ? Date.parse(input.start) : before.start_ms;
+          const finish = input.finish ? Date.parse(input.finish) : before.end_ms;
+          if (finish !== null && finish <= start) throw new Error("Finish must be after start.");
+          if (finish === null && start > Date.now()) throw new Error("An open clock cannot start in the future.");
           const demandId = input.demand_id ?? before.demand_id;
           if (!this.db.prepare("SELECT id FROM demands WHERE contractor_id=? AND id=?").get(before.contractor_id, demandId)) throw new Error("Demand is not assigned to this contractor.");
           this.billing.assertUnlocked(before.contractor_id, before.start_ms, before.end_ms);
           this.billing.assertUnlocked(before.contractor_id, start, finish);
           if (this.overlaps(before.contractor_id, start, finish, before.id)) throw new Error("Correction overlaps another time entry.");
-          this.db.prepare("UPDATE entries SET start_ms = ?, end_ms = ?, demand_id=?, reviewed=0 WHERE id = ?").run(start, finish, demandId, before.id);
+          this.db.prepare("UPDATE entries SET start_ms = ?, end_ms = ?, demand_id=?, reviewed=0, voided=0 WHERE id = ?").run(start, finish, demandId, before.id);
           this.bump(before.contractor_id);
-          this.audit(source, input.action, before, { ...before, start_ms: start, end_ms: finish, demand_id: demandId, reviewed: 0, reason: input.reason });
-          return { entry_id: before.id, corrected: true, reason: input.reason };
+          this.audit(source, input.action, before, { ...before, start_ms: start, end_ms: finish, demand_id: demandId, reviewed: 0, voided: 0, reason: input.reason });
+          const contractor = this.contractor(before.contractor_id);
+          const say = RECEIPTS[contractor.language];
+          const confirmation = finish === null ? say.started(clockTime(start, before.timezone, contractor.language), before.details)
+            : say.ownerConfirmed(clockTime(start, before.timezone, contractor.language), clockTime(finish, before.timezone, contractor.language), duration(finish - start));
+          this.db.prepare("UPDATE receipts SET response=? WHERE source IN (?, ?)").run(confirmation, before.start_message, before.stop_message);
+          return { entry_id: before.id, corrected: true, restored: Boolean(before.voided), status: finish === null ? "open" : "closed",
+            start: new Date(start).toISOString(), finish: finish === null ? null : new Date(finish).toISOString(), confirmation, reason: input.reason };
         }
         case "void":
         case "review_entry": {

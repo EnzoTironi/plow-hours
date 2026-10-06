@@ -380,3 +380,62 @@ test("out-of-order starts and stops keep conflicting timestamps for review rathe
   f.ledger.manage({ action: "close_period", contractor_id: "ana" }, "close-after-review");
   assert.equal(f.ledger.billingReport("ana").expected?.total_hours, 2);
 });
+
+
+test("the owner can move an open start to 9am without voiding, resetting or losing captured evidence", t => {
+  const f = fixture(t);
+  const original = f.source("open-start", "19:18");
+  f.ledger.clock(original, { kind: "start", detail: "landing", details: "Ours and Mac Guardian fixes" });
+  const before = f.report().open_entry!;
+  f.ledger.manage({ ...f.profile, rate_cents: 5000, timezone: "America/Sao_Paulo" }, "updated-profile");
+  const correction = { action: "correct", entry_id: before.id, start: "2026-10-02T09:00:00Z", reason: "Owner confirmed 9am" };
+  const receipt = f.ledger.manage(correction, "correct-open");
+  f.restart();
+  const after = f.report().open_entry!;
+  assert.equal(after.id, before.id); assert.equal(after.end_ms, null); assert.equal(after.voided, 0);
+  assert.equal(after.start_ms, Date.parse(correction.start));
+  assert.equal(after.rate_cents, before.rate_cents); assert.equal(after.timezone, before.timezone);
+  assert.equal(after.details, before.details); assert.equal(after.start_message, before.start_message);
+  assert.deepEqual(f.ledger.manage(correction, "correct-open"), receipt);
+  assert.ok(!f.report().audit.some(a => a.action === "void"));
+  f.ledger.clock(f.source("finish", "19:30"), { kind: "stop", detail: "Done" });
+  assert.equal(f.report().entries.length, 1); assert.equal(f.report().total_hours, 10.5);
+});
+
+test("a mistaken void is restored and corrected atomically on the same open entry", t => {
+  const f = fixture(t);
+  const original = f.source("start", "19:18");
+  f.ledger.clock(original, { kind: "start", detail: "landing" });
+  const before = f.report().open_entry!;
+  f.ledger.manage({ action: "void", entry_id: before.id, reason: "Mistaken correction attempt" }, "mistake");
+  const correction = { action: "correct", entry_id: before.id, start: "2026-10-02T09:00:00Z", reason: "Restore the accidentally voided clock" };
+  assert.throws(() => f.ledger.manage(correction, "no-restore"), /restore=true/);
+  const db = new DatabaseSync(join(f.directory, "hours.sqlite"));
+  db.exec("CREATE TRIGGER fail_restore BEFORE UPDATE ON entries BEGIN SELECT RAISE(ABORT,'Injected restore failure'); END;");
+  const snapshot = f.report();
+  assert.throws(() => f.ledger.manage({ ...correction, restore: true }, "restore"), /Injected restore failure/);
+  assert.deepEqual(f.report(), snapshot);
+  db.exec("DROP TRIGGER fail_restore"); db.close();
+  f.ledger.manage({ ...correction, restore: true }, "restore");
+  assert.equal(f.report().open_entry!.id, before.id);
+  assert.equal(f.report().entries.length, 1);
+  assert.doesNotMatch(f.ledger.clockReceipt(original)!, /anulado/);
+  f.ledger.clock(f.source("finish", "20:00"), { kind: "stop", detail: "Done" });
+  assert.equal(f.report().total_hours, 11);
+});
+
+test("partial corrections preserve closed endpoints and reject invalid open corrections without changing records", t => {
+  const f = fixture(t);
+  f.ledger.clock(f.source("start", "08:00"), { kind: "start", detail: "landing" });
+  f.ledger.clock(f.source("stop", "10:00"), { kind: "stop", detail: "Done" });
+  const closed = f.report().entries[0]!;
+  f.ledger.manage({ action: "correct", entry_id: closed.id, start: "2026-10-02T09:00:00Z", reason: "Fix start" }, "closed-start");
+  assert.equal(f.report().entries[0]!.end_ms, closed.end_ms);
+  f.ledger.clock(f.source("next", "12:00"), { kind: "start", detail: "brand" });
+  const open = f.report().open_entry!;
+  for (const start of ["2026-10-02T09:30:00Z", "2050-01-01T09:00:00Z"]) {
+    const snapshot = f.report();
+    assert.throws(() => f.ledger.manage({ action: "correct", entry_id: open.id, start, reason: "Invalid correction" }, start), /overlaps|future/);
+    assert.deepEqual(f.report(), snapshot);
+  }
+});
