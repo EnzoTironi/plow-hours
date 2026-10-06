@@ -13,10 +13,10 @@ const timestamp = z.iso.datetime({ offset: true });
 export const clockSourceSchema = z.object({ line_uid: z.string().min(1), chat_uid: z.string().min(1),
   handle: z.string().min(1), message_uid: z.string().min(1), created_at: timestamp, body: z.string() }).strict();
 type ClockSource = z.infer<typeof clockSourceSchema>;
-type StartIntent = { kind: "start"; detail: string } | { kind: "confirm_start"; detail: string }
+type StartIntent = { kind: "start"; detail: string; description?: string; project?: string } | { kind: "confirm_start"; detail: string; description?: string; project?: string }
   | { kind: "clarify_start" } | { kind: "cancel_start" };
 export type ClockIntent = NonNullable<ReturnType<typeof clockCommand>> | StartIntent | { kind: "switch"; detail: string; details: string }
-  | { kind: "note"; detail: string };
+  | { kind: "note"; detail: string; project?: string };
 const contractorSchema = z.object({
   id, name: text, handle: text, chat_uid: text, timezone: text,
   rate_cents: z.number().int().min(0).max(100_000_000),
@@ -24,7 +24,7 @@ const contractorSchema = z.object({
   sheet_revision: z.number().int(), wiki_revision: z.number().int(),
   active: z.number().int().min(0).max(1),
 });
-const demandSchema = z.object({ id, contractor_id: id, project: text, summary: text, references: z.string(), active: z.number() });
+const demandSchema = z.object({ id, contractor_id: id, project: text, summary: text, references: z.string(), active: z.number(), reported: z.number().int().min(0).max(1) });
 const receiptSchema = z.object({ response: z.string() });
 type Contractor = z.infer<typeof contractorSchema>;
 type Entry = z.infer<typeof entrySchema>;
@@ -135,7 +135,7 @@ export class HoursLedger {
       CREATE TABLE IF NOT EXISTS unmatched_stops (source TEXT PRIMARY KEY, contractor_id TEXT NOT NULL REFERENCES contractors(id), source_json TEXT NOT NULL, details TEXT NOT NULL);
     `);
     this.transaction(() => {
-      for (const [table, column] of [["entries", "voided"], ["entries", "reviewed"], ["contractors", "active"], ["demands", "active"]] as const) {
+      for (const [table, column] of [["entries", "voided"], ["entries", "reviewed"], ["contractors", "active"], ["demands", "active"], ["demands", "reported"]] as const) {
         if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column))
           this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} INTEGER NOT NULL DEFAULT ${column === "active" ? 1 : 0} CHECK(${column} IN (0,1))`);
       }
@@ -182,10 +182,11 @@ export class HoursLedger {
       const report = this.report(contractorId)[0];
       if (!report) throw new Error("Contractor is not registered.");
       return { contractor: { id: report.contractor.id, name: report.contractor.name, timezone: report.contractor.timezone },
-        demands: report.demands.filter(d => d.active), total_hours: report.total_hours,
+        demands: report.demands.filter(d => d.active && !d.reported), total_hours: report.total_hours,
         pending_start: this.pendingStart(contractorId)?.source.created_at ?? null,
         pending_clock: report.pending_clock,
-        clock_language: "Use start for clear work beginning now. If beginning now is clear but the assigned work is unclear, use clarify_start before asking. Use confirm_start to resolve that saved start, or cancel_start to withdraw it. Never clock uncertain intent, plans, questions, negations or historical statements.",
+        open_entry: report.open_entry ? { start_ms: report.open_entry.start_ms, details: report.open_entry.details } : null,
+        clock_language: "Use start immediately for clear work beginning now, even without a task or description. details records the worker's own overview; project is optional and must come from context. Ask what they are working on after recording the start. Their answer and later activity changes use note, keeping that clock open. Assigned demands are optional context, never required or approved tasks. confirm_start is only for a legacy pending start. Never clock uncertain intent, plans, questions, negations or historical statements.",
         entries: report.entries.filter(e => !e.voided).map(({ demand_id, start_ms, end_ms, details }) => ({ demand_id, start_ms, end_ms, details })),
         review_needed: report.review_needed,
         billing: (() => { const { fingerprint, expected, ...status } = this.billingReport(contractorId); return status; })() };
@@ -295,7 +296,7 @@ export class HoursLedger {
     const active = this.open(contractor.id);
     if (active) return ms < active.start_ms && command.kind !== "cancel_start"
       ? this.clockConflict(contractor, origin.source, "Este início chegou atrasado e vem antes do ponto que está aberto.")
-      : `Seu ponto já está aberto em ${active.demand_id}. Se mudou de tarefa, me diga qual é a nova tarefa.`;
+      : `Seu ponto já está aberto desde ${localTime(active.start_ms, active.timezone)}. Se mudou de atividade, posso acrescentar uma anotação.`;
     if (command.kind === "cancel_start") {
       this.db.prepare("DELETE FROM pending_starts WHERE contractor_id = ?").run(contractor.id);
       return "Início pendente cancelado. Nenhuma hora foi registrada.";
@@ -311,9 +312,14 @@ export class HoursLedger {
       return "Não há um início pendente desta conversa para confirmar. Me diga quando começar uma demanda.";
     }
     if (ms > Date.parse(input.created_at)) return this.clockConflict(contractor, input, "A confirmação veio antes do início pendente.");
-    const demand = this.db.prepare("SELECT id FROM demands WHERE id = ? AND contractor_id = ? AND active=1").get(command.detail, contractor.id);
-    if (!demand) return "Qual demanda cadastrada você está fazendo?";
     const source = JSON.stringify([origin.source.line_uid, origin.source.chat_uid, origin.source.message_uid]);
+    const assigned = this.db.prepare("SELECT * FROM demands WHERE id = ? AND contractor_id = ? AND active=1 AND reported=0").get(command.detail, contractor.id);
+    const description = workText(command.description ?? (assigned ? "" : command.detail), this.billing.secrets(contractor.id));
+    const demand = assigned ? demandSchema.parse(assigned) : {
+      id: `activity_${createHash("sha256").update(source).digest("hex").slice(0,24)}`, contractor_id: contractor.id,
+      project: workText(command.project ?? "Uncategorized", this.billing.secrets(contractor.id)),
+      summary: description.slice(0,2000) || "Work in progress", references: "", active: 1, reported: 1,
+    };
     const waiting = this.db.prepare("SELECT source, source_json, details FROM unmatched_stops WHERE contractor_id=?").all(contractor.id)
       .map(row => z.object({ source: text, source_json: z.string(), details: z.string() }).parse(row))
       .map(row => ({ ...row, message: clockSourceSchema.parse(JSON.parse(row.source_json)) }))
@@ -323,13 +329,15 @@ export class HoursLedger {
     if (this.overlaps(contractor.id, ms, finish, source)) return this.clockConflict(contractor, origin.source, "Esse horário cruza um ponto existente.");
     if (this.billing.isLocked(contractor.id, ms, finish)) return this.clockConflict(contractor, origin.source, "Este início chegou depois do fechamento do período.");
     this.billing.assertUnlocked(contractor.id, ms, finish);
+    if (!assigned) this.db.prepare('INSERT INTO demands(id, contractor_id, project, summary, "references", reported) VALUES (?, ?, ?, ?, ?, 1)')
+      .run(demand.id, contractor.id, demand.project, demand.summary, "");
     const entryId = `hours_${createHash("sha256").update(source).digest("hex").slice(0,24)}`;
-    this.db.prepare("INSERT INTO entries(id, contractor_id, demand_id, start_ms, rate_cents, timezone, start_message) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(entryId, contractor.id, command.detail, ms, origin.rate_cents, origin.timezone, source);
+    this.db.prepare("INSERT INTO entries(id, contractor_id, demand_id, start_ms, rate_cents, timezone, start_message, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(entryId, contractor.id, demand.id, ms, origin.rate_cents, origin.timezone, source, description);
     this.db.prepare("DELETE FROM pending_starts WHERE contractor_id = ?").run(contractor.id);
     this.bump(contractor.id);
-    this.audit(source, "start", undefined, { contractor_id: contractor.id, demand_id: command.detail, start_ms: ms });
-    let response = `Ponto iniciado às ${localTime(ms, origin.timezone)}, demanda ${command.detail}.`;
+    this.audit(source, "start", undefined, { contractor_id: contractor.id, demand_id: demand.id, start_ms: ms, details: description, project: demand.project });
+    let response = `Ponto iniciado às ${localTime(ms, origin.timezone)}.${description ? ` Trabalho: ${description}.` : ""}`;
     if (waiting && finish !== null) {
       const stop = this.finishClock(entrySchema.parse(this.db.prepare("SELECT * FROM entries WHERE id=?").get(entryId)), finish, waiting.details, waiting.source);
       this.db.prepare("UPDATE receipts SET response=? WHERE source=?").run(stop, waiting.source);
@@ -356,7 +364,7 @@ export class HoursLedger {
     this.db.prepare("UPDATE entries SET end_ms=?, details=?, stop_message=? WHERE id=?").run(ms, clean, source, active.id);
     this.bump(active.contractor_id);
     this.audit(source, "stop", active, { ...active, end_ms: ms, details: clean, stop_message: source });
-    return `Ponto encerrado às ${localTime(ms, active.timezone)}. ${hours(ms - active.start_ms)} h na demanda ${active.demand_id}.${ms - active.start_ms > 12 * 3_600_000 ? " Esse bloco passou de 12 horas e precisa da revisão do dono antes do fechamento." : ""}`;
+    return `Ponto encerrado às ${localTime(ms, active.timezone)}. ${hours(ms - active.start_ms)} h registradas.${ms - active.start_ms > 12 * 3_600_000 ? " Esse bloco passou de 12 horas e precisa da revisão do dono antes do fechamento." : ""}`;
   }
 
   clockReceipt(input: ClockSource): string | undefined {
@@ -396,15 +404,21 @@ export class HoursLedger {
       let response: string;
       const active = this.open(contractor.id);
       if (command.kind === "status") {
-        response = active ? `Ponto aberto desde ${localTime(active.start_ms, active.timezone)}, demanda ${active.demand_id}.`
+        response = active ? `Ponto aberto desde ${localTime(active.start_ms, active.timezone)}.${active.details ? ` Trabalho: ${active.details}` : ""}`
           : "Nenhum ponto aberto. Me diga quando começar e em qual tarefa.";
       } else if (command.kind === "note") {
         if (!active) response = "Não há um ponto aberto para anotar esse trabalho. Me diga quando começar.";
         else {
           const details = workText([active.details, command.detail].filter(Boolean).join("\n"), this.billing.secrets(contractor.id));
+          const demand = demandSchema.parse(this.db.prepare("SELECT * FROM demands WHERE contractor_id=? AND id=?").get(contractor.id, active.demand_id));
+          const project = demand.reported && demand.project === "Uncategorized" && command.project
+            ? workText(command.project, this.billing.secrets(contractor.id)) : demand.project;
+          if (demand.reported) this.db.prepare("UPDATE demands SET summary=?, project=? WHERE contractor_id=? AND id=?")
+            .run(active.details ? demand.summary : workText(command.detail, this.billing.secrets(contractor.id)).slice(0,2000),
+              project, contractor.id, active.demand_id);
           this.db.prepare("UPDATE entries SET details=? WHERE id=?").run(details, active.id);
           this.bump(contractor.id);
-          this.audit(source, "note", active, { ...active, details });
+          this.audit(source, "note", active, { ...active, details, project });
           response = "Anotação registrada. Seu ponto continua aberto com o mesmo horário inicial.";
         }
       } else if (command.kind === "switch") {
@@ -634,7 +648,7 @@ export class HoursLedger {
         rows.push([
           start.slice(0, 10), start, localTime(entry.end_ms, entry.timezone), hours(entry.end_ms - entry.start_ms),
           entry.rate_cents / 100, sheetText(demand.project),
-          sheetText([demand.id, demand.summary, demand.references, entry.details].filter(Boolean).join(" | ")),
+          sheetText([demand.reported ? "" : demand.id, demand.reported ? "" : demand.summary, demand.references, entry.details].filter(Boolean).join(" | ")),
         ]);
       }
       const tsv = rows.map(row => row.map(cell => String(cell).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\n");

@@ -42,13 +42,13 @@ export const billingSubmissionSchema = z.discriminatedUnion("action", [
 ]);
 export const selfSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("report") }).strict(),
-  z.object({ action: z.literal("start"), demand_id: contractorId }).strict(),
+  z.object({ action: z.literal("start"), demand_id: contractorId.optional(), details: z.string().max(4000).default(""), project: text.optional() }).strict(),
   z.object({ action: z.literal("switch"), demand_id: contractorId, details: z.string().max(4000).default("") }).strict(),
   z.object({ action: z.literal("clarify_start") }).strict(),
-  z.object({ action: z.literal("confirm_start"), demand_id: contractorId }).strict(),
+  z.object({ action: z.literal("confirm_start"), demand_id: contractorId.optional(), details: z.string().max(4000).default(""), project: text.optional() }).strict(),
   z.object({ action: z.literal("cancel_start") }).strict(),
   z.object({ action: z.literal("stop"), details: z.string().max(4000).default("") }).strict(),
-  z.object({ action: z.literal("note"), details: z.string().trim().min(1).max(4000) }).strict(),
+  z.object({ action: z.literal("note"), details: z.string().trim().min(1).max(4000), project: text.optional() }).strict(),
   ...billingSubmissionSchema.options,
 ]);
 const rowSchema = z.object({ contractor_id: text, country: z.enum(["BR", "US"]), period_start: date,

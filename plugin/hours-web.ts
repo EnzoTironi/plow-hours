@@ -23,7 +23,7 @@ function webEntries(report: HoursReport, range: z.infer<typeof dateRange>, billi
     return {
       id: entry.id, demand_id: entry.demand_id, start_ms: start, end_ms: finish,
       timezone, rate_usd: entry.rate_cents / 100, project: demand.project,
-      details: [demand.id, demand.summary, demand.references, entry.details,
+      details: [demand.reported ? "" : demand.id, demand.reported ? "" : demand.summary, demand.references, entry.details,
         clipped ? `Partial session in selected dates. Original: ${localTime(entry.start_ms, entry.timezone)} to ${localTime(entry.end_ms ?? entry.start_ms, entry.timezone)}` : ""].filter(Boolean).join(" | "),
       day: localTime(start, timezone).slice(0, 10),
       start: finish === null ? null : localTime(start, timezone), finish: finish === null ? null : localTime(finish, timezone),
@@ -42,7 +42,7 @@ export function hoursWebSnapshot(ledger: HoursLedger, rawRange: z.infer<typeof d
       return {
         id: contractor.id, name: contractor.name, timezone: contractor.timezone, rate_usd: contractor.rate_cents / 100,
         projects: [...new Set(demands.map(demand => demand.project))],
-        demands: demands.filter(demand => demand.active).map(({ id, project, summary, references }) => ({ id, project, summary, references })),
+        demands: demands.filter(demand => demand.active && !demand.reported).map(({ id, project, summary, references }) => ({ id, project, summary, references })),
         active: Boolean(contractor.active), review_needed: entries.some(needsReview) || pending_clock.reviews.length > 0,
         pending_clock: { start: pending_clock.start, timezone: pending_clock.timezone, messages: pending_clock.messages, unmatched_stops: pending_clock.unmatched_stops },
         billing: { requested: billing.requested, period_start: billing.requested ? billing.period_start : null, period_end: billing.requested ? billing.period_end : null, closed: billing.closed, approved: billing.approved, ready_for_owner_review: billing.ready_for_owner_review, unresolved_clocks: Boolean(billing.unresolved_clocks), discrepancy_cents: billing.discrepancy_cents, expected: billing.expected ? { timezone: billing.expected.timezone, currency: billing.expected.currency, amount_cents: billing.expected.expected_amount_cents, total_hours: billing.expected.total_hours } : null },

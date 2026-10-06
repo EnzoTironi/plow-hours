@@ -136,14 +136,14 @@ test("a committed natural clock can be recovered without rerunning the model", t
   assert.equal(f.snapshot().entries.length, 1);
 });
 
-test("only a registered sender in their registered thread can clock assigned demands", t => {
+test("only a registered sender in their registered thread can clock work, including unassigned activities", t => {
   const f = fixture(t);
   assert.equal(f.clock("comecei landing", "2026-10-02T12:00:00Z", { handle: "+15550000003" }), undefined);
   assert.equal(f.clock("comecei landing", "2026-10-02T12:00:00Z", { chat_uid: "cht_other" }), undefined);
   assert.equal(clockCommand("Ela disse que comecei landing"), undefined);
-  assert.match(f.clock("comecei outra", "2026-10-02T12:00:00Z") ?? "", /Qual demanda/);
-  assert.equal(f.snapshot().entries.length, 0);
-  assert.match(f.clock("parei", "2026-10-02T12:00:00Z") ?? "", /não tem ponto aberto/);
+  assert.match(f.clock("comecei outra", "2026-10-02T12:00:00Z") ?? "", /Ponto iniciado/);
+  assert.equal(f.snapshot().entries.length, 1);
+  assert.equal(f.snapshot().open_entry?.details, "outra");
 });
 
 test("each contractor can use the same demand id and cannot access another contractor's session", t => {

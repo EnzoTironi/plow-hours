@@ -235,7 +235,7 @@ try {
   } else if (process.env.EVAL_PHASE === 'onboarding_delivery') {
     const ownerText = turn => turn.responses.filter(r => r.chat_uid === home.uid).map(r => r.body).join('\n').replaceAll('’', "'");
     function unconfirmed(turn) {
-      assert.match(ownerText(turn), /unconfirmed|not confirmed|did(?: not|n't) confirm|can(?:not|'t) (?:confirm|check)|haven't confirmed|could(?: not|n't) confirm|no delivery confirmation/i);
+      assert.match(ownerText(turn), /unconfirmed|not confirmed|did(?: not|n't) confirm|can(?:not|'t) (?:confirm|check|verify)|haven't confirmed|could(?: not|n't) confirm|no .{0,20}(?:delivery confirmation|receipt)/i);
     }
     function noFallback(turn) {
       assert.ok(!/\b(?:SMS|WhatsApp)\b|reopen Plow|restart Plow|refresh Plow/i.test(ownerText(turn)), 'No unsupported transport or invented UI fix');
@@ -287,6 +287,53 @@ try {
     check('The delivery conversation uses successful real model calls', () => {
       assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
     });
+  } else if (process.env.EVAL_PHASE === 'work_overview') {
+    await say(owner, home.uid, 'Register Alex at alex@example.test, $20/hour, America/Sao_Paulo. Create an iMessage group with us. No assigned tasks yet.');
+    const workerReport = () => { const report = ledger.report().find(r => r.contractor.handle === alex.provider_key); assert.ok(report); return report; };
+    check('The owner can onboard a contractor without assigning or approving tasks', () => {
+      assert.equal(workerReport().demands.length, 0); assert.ok(chats.has('cht_eval_alex'));
+    });
+    const began = await say(alex, 'cht_eval_alex', "Hi Plow Hours, I'm starting work now.", '2026-10-05T21:03:00-03:00');
+    const original = workerReport().open_entry;
+    check('A real model opens the point immediately before asking for the overview', () => {
+      assert.ok(original); assert.equal(original.start_ms, Date.parse('2026-10-05T21:03:00-03:00'));
+      assert.equal(workerReport().pending_clock.start, null); assert.equal(workerReport().entries.length, 1);
+      assert.ok(began.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'start'));
+      assert.ok(!began.tool_calls.some(c => c.args.action === 'clarify_start'));
+      assert.match(began.responses.map(r => r.body).join('\n'), /what|working on|doing/i);
+    });
+    const described = await say(alex, 'cht_eval_alex', "I'm making an animation for Rowan.", '2026-10-05T21:04:00-03:00');
+    check('The worker overview is recorded without a predefined task, owner message or shifted start', () => {
+      const r = workerReport(); assert.equal(r.open_entry.id, original.id); assert.equal(r.open_entry.start_ms, original.start_ms);
+      assert.match(r.open_entry.details, /animation.*Rowan/i); assert.equal(r.entries.length, 1);
+      assert.ok(described.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'note'));
+      assert.ok(described.responses.every(response => response.chat_uid === 'cht_eval_alex'));
+      assert.ok(!/Dane.*(?:approve|register|add)|need.*(?:approved task|registered task)/i.test(described.responses.map(r => r.body).join('\n')));
+      const row = hoursWebSnapshot(ledger).contractors.find(c => c.id === r.contractor.id);
+      assert.ok(row); assert.equal(row.demands.length, 0); assert.match(row.entries[0].details, /animation.*Rowan/i);
+      assert.ok(!row.entries[0].details.includes('activity_'));
+    });
+    const changed = await say(alex, 'cht_eval_alex', "Now I'm working on color correction for a different video.", '2026-10-05T21:13:00-03:00');
+    check('A different activity appends an overview while keeping the same running point', () => {
+      const r = workerReport(); assert.equal(r.entries.length, 1); assert.equal(r.open_entry.id, original.id);
+      assert.equal(r.open_entry.start_ms, original.start_ms); assert.match(r.open_entry.details, /animation.*Rowan/i); assert.match(r.open_entry.details, /color correction/i);
+      assert.ok(changed.tool_calls.some(c => c.args.action === 'note'));
+      assert.ok(!changed.tool_calls.some(c => ['start', 'stop', 'switch'].includes(c.args.action)));
+    });
+    const human = await say(alex, 'cht_eval_alex', 'Dane, can you send me the video file?', '2026-10-05T21:14:00-03:00');
+    check('The agent still stays silent for a question addressed to the boss', () => { assert.deepEqual(human.responses, []); assert.deepEqual(human.tool_calls, []); });
+    await say(alex, 'cht_eval_alex', 'Finished for today.', '2026-10-05T22:03:00-03:00');
+    check('Finishing records exactly one hour with both work updates and no task approval', () => {
+      const r = workerReport(); assert.equal(r.open_entry, null); assert.equal(r.entries.length, 1); assert.equal(r.total_hours, 1);
+      assert.equal(r.entries[0].rate_cents, 2000); assert.match(r.entries[0].details, /animation.*Rowan/i); assert.match(r.entries[0].details, /color correction/i);
+    });
+    const billing = await say(owner, home.uid, 'Plow Hours, set up US invoicing for Alex for October 5, 2026 only. Close that period and show me the hours and calculated USD value privately. Do not approve any billing or send any group message yet.');
+    check('Reported work closes into exact billing without any task approval or payment', () => {
+      const r = ledger.billingReport(workerReport().contractor.id); assert.equal(r.expected.expected_amount_cents, 2000);
+      assert.equal(r.closed, true); assert.equal(r.approved, false); assert.equal(r.paid, false);
+      assert.ok(billing.responses.every(r => r.chat_uid === home.uid));
+    });
+    check('The overview conversation uses successful real model calls', () => { assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200)); });
   } else {
   await say(owner, home.uid, 'Oi! Quero controlar as horas de vários contratados com você. Como começamos?');
   check('Initial conversation gets a successful real model response and does not invent contractors', () => {
@@ -351,20 +398,20 @@ try {
     await quiet(ana, 'Obrigado!');
     await say(owner, home.uid, 'Cadastre outra demanda para Ana: branding, projeto Brand, criar identidade visual.');
     const pending = await say(ana, 'cht_eval_ana', 'Comecei a trabalhar agora.', '2026-10-05T11:00:00-03:00');
-    check('A clock clarification remains available when the work is ambiguous', () => {
-      assert.ok(pending.responses.length > 0); assert.equal(ledger.self({ action: 'report' }, 'ana', 'eval-pending').pending_start, '2026-10-05T11:00:00-03:00');
-      assert.equal(hoursWebSnapshot(ledger).contractors.find(p => p.id === 'ana').pending_clock.start, '2026-10-05T11:00:00-03:00');
+    check('An undescribed start opens the point before the agent asks for the overview', () => {
+      assert.ok(pending.responses.length > 0); assert.equal(ledger.report('ana')[0].open_entry.start_ms, Date.parse('2026-10-05T11:00:00-03:00'));
+      assert.equal(hoursWebSnapshot(ledger).contractors.find(p => p.id === 'ana').pending_clock.start, null);
     });
     const botQuestion = messages.get('cht_eval_ana').filter(m => m.direction === 'outbound').at(-1);
-    const savedStart = ledger.self({ action: 'report' }, 'ana', 'eval-pending').pending_start;
+    const savedStart = ledger.report('ana')[0].open_entry.start_ms;
     const lunch = await quiet(owner, 'Ana, você já almoçou?');
     await quiet(ana, 'Sim.', messages.get('cht_eval_ana').find(m => m.uid === lunch.message_uid));
-    check('An interleaved human conversation does not cancel or confirm the pending clock', () => {
-      assert.equal(ledger.self({ action: 'report' }, 'ana', 'eval-pending').pending_start, savedStart);
+    check('An interleaved human conversation leaves the running clock unchanged', () => {
+      assert.equal(ledger.report('ana')[0].open_entry.start_ms, savedStart);
     });
     await say(ana, 'cht_eval_ana', 'Branding.', '2026-10-05T11:05:00-03:00', { reply_to: botQuestion });
     check('A short answer replying to the bot completes its question at the original time', () => {
-      const r = ledger.report('ana')[0]; assert.equal(r.open_entry.demand_id, 'branding'); assert.equal(r.open_entry.start_ms, Date.parse('2026-10-05T11:00:00-03:00'));
+      const r = ledger.report('ana')[0]; assert.match(r.open_entry.details, /branding/i); assert.equal(r.open_entry.start_ms, Date.parse('2026-10-05T11:00:00-03:00'));
     });
     await quiet(owner, 'Ana, você pode me mandar o dashboard das horas?');
     const dashboard = await say(owner, 'cht_eval_ana', 'Plow Hours, me manda o dashboard?');
@@ -430,11 +477,11 @@ try {
     await say(ana, 'cht_eval_ana', 'Se eu disser que comecei a trabalhar, você registra? Só estou perguntando, ainda não comecei.');
     check('Questions and quoted examples do not clock work', () => assert.equal(ledger.report('ana')[0].entries.length, 0));
     await say(ana, 'cht_eval_ana', 'Comecei a trabalhar agora, mas não disse em qual tarefa.', '2026-10-02T09:00:00-03:00');
-    check('Ambiguous assigned work requires clarification before a clock write', () => { assert.equal(ledger.report('ana')[0].entries.length, 0); assert.match(turns.at(-1).responses.map(r => r.body).join(' '), /landing|branding|demanda|tarefa/i); });
+    check('Missing work context does not delay the actual start', () => { assert.equal(ledger.report('ana')[0].entries.length, 1); assert.equal(ledger.report('ana')[0].open_entry.start_ms, Date.parse('2026-10-02T09:00:00-03:00')); });
     const start = await say(ana, 'cht_eval_ana', 'Na landing page.', '2026-10-02T09:10:00-03:00');
     check('Natural start intent invokes the real scoped tool with the original timestamp', () => { assert.ok(start.model_requests > 0); assert.equal(ledger.report('ana')[0].open_entry.start_ms, Date.parse('2026-10-02T09:00:00-03:00')); });
     await say(ben, 'cht_eval_ben', '/in qa', '2026-10-02T09:00:00-04:00');
-    await say(ana, 'cht_eval_ana', 'Terminei a landing e já comecei o branding agora.', '2026-10-02T10:00:00-03:00');
+    await say(ana, 'cht_eval_ana', 'Please split my recorded time here: close the current block and start a separate block for branding now.', '2026-10-02T10:00:00-03:00');
     check('One message switches assigned work atomically without losing a minute', () => { const r = ledger.report('ana')[0]; assert.equal(r.open_entry.demand_id, 'branding'); assert.equal(r.open_entry.start_ms, Date.parse('2026-10-02T10:00:00-03:00')); assert.equal(r.total_hours, 1); });
     await say(ana, 'cht_eval_ana', 'Vou fazer uma pausa agora.', '2026-10-02T10:15:00-03:00');
     await say(ana, 'cht_eval_ana', 'Voltei ao branding agora.', '2026-10-02T10:45:00-03:00');

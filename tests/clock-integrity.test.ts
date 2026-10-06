@@ -41,6 +41,49 @@ test("one natural task switch preserves every minute and both rates, with all-or
   assert.equal(r.entries[0]?.end_ms, r.entries[1]?.start_ms);
 });
 
+test("an immediate start with no assigned work keeps its time and rate when the overview arrives, including after restart", t => {
+  const f = fixture(t);
+  f.ledger.clock(f.source("plain-start", "09:00", "Starting work now"), { kind: "start", detail: "" });
+  const original = f.report().open_entry;
+  assert.ok(original); assert.equal(original.details, ""); assert.equal(f.report().pending_clock.start, null);
+  f.ledger.manage({ ...f.profile, rate_cents: 5000, timezone: "America/New_York" }, "rate-change");
+  f.restart();
+  const source = f.source("overview", "09:03", "Animation for Rowan");
+  const receipt = f.ledger.clock(source, { kind: "note", detail: "Animation for Rowan", project: "Rowan" });
+  assert.equal(f.ledger.clock(source, { kind: "note", detail: "Duplicate message", project: "Other" }), receipt);
+  f.ledger.clock(f.source("new-activity", "09:15"), { kind: "note", detail: "Color correction for another video", project: "Another project" });
+  const active = f.report().open_entry;
+  assert.ok(active); assert.equal(active.id, original.id); assert.equal(active.start_ms, original.start_ms);
+  assert.equal(active.rate_cents, 3000); assert.equal(active.timezone, "UTC"); assert.equal(f.report().entries.length, 1);
+  assert.equal(active.details, "Animation for Rowan\nColor correction for another video");
+  const view = hoursWebSnapshot(f.ledger).contractors[0];
+  assert.ok(view); assert.equal(view.entries[0]?.project, "Rowan"); assert.ok(!view.entries[0]?.details.includes("activity_"));
+  assert.ok(view.demands.every(d => d.id !== active.demand_id), "Reported activities do not appear as owner-assigned tasks");
+  f.ledger.clock(f.source("plain-stop", "10:00"), { kind: "stop", detail: "Finished" });
+  assert.equal(f.report().total_hours, 1);
+  f.ledger.manage({ action: "billing_request", contractor_id: "ana", country: "US", period_start: "2026-10-02", period_end: "2026-10-02" }, "reported-billing");
+  f.ledger.manage({ action: "close_period", contractor_id: "ana" }, "reported-close");
+  assert.equal(f.ledger.billingReport("ana").expected.expected_amount_cents, 3000);
+  assert.equal(f.ledger.billingReport("ana").approved, false);
+  f.ledger.clock({ ...f.source("next-start", "09:00"), created_at: "2026-10-03T09:00:00Z" }, { kind: "start", detail: active.demand_id, description: "" });
+  f.ledger.clock({ ...f.source("next-overview", "09:03"), created_at: "2026-10-03T09:03:00Z" }, { kind: "note", detail: "A different animation", project: "New project" });
+  assert.notEqual(f.report().open_entry?.demand_id, active.demand_id);
+  const previous = f.report().demands.find(d => d.id === active.demand_id);
+  assert.equal(previous?.summary, "Animation for Rowan"); assert.equal(previous?.project, "Rowan");
+  assert.equal(f.ledger.billingReport("ana").expected.expected_amount_cents, 3000);
+});
+
+test("legacy pending starts accept a free-form overview without a task approval and preserve their original source", t => {
+  const f = fixture(t);
+  const origin = f.source("legacy-start", "09:00", "Started working");
+  f.ledger.clock(origin, { kind: "clarify_start" });
+  f.restart();
+  f.ledger.clock(f.source("legacy-overview", "09:03"), { kind: "confirm_start", detail: "", description: "Animation for Rowan", project: "Rowan" });
+  const active = f.report().open_entry;
+  assert.ok(active); assert.equal(active.start_ms, Date.parse(origin.created_at)); assert.equal(active.details, "Animation for Rowan");
+  assert.equal(f.report().pending_clock.start, null); assert.equal(f.report().demands.find(d => d.id === active.demand_id)?.reported, 1);
+});
+
 test("invalid switches keep the original clock and closed periods reject late starts", t => {
   const f = fixture(t);
   f.ledger.clock(f.source("first", "09:00"), { kind: "start", detail: "landing" });
@@ -139,7 +182,9 @@ test("long sessions require owner review; archiving and deactivation preserve hi
   f.ledger.manage({ action: "correct", entry_id: id, start: "2026-10-02T00:00:00Z", finish: "2026-10-02T02:00:00Z", reason: "Worker confirmed 2 hours" }, "correct");
   assert.deepEqual(f.report().review_needed, []);
   f.ledger.manage({ action: "archive_demand", contractor_id: "ana", demand_id: "landing", reason: "Complete" }, "archive");
-  assert.match(f.ledger.clock(f.source("archived", "15:00"), { kind: "start", detail: "landing" }) ?? "", /Qual demanda/);
+  assert.match(f.ledger.clock(f.source("archived", "15:00"), { kind: "start", detail: "landing" }) ?? "", /Ponto iniciado/);
+  assert.equal(f.report().demands.find(d => d.id === "landing")?.active, 0, "Clocking reported work does not reactivate an archived assignment");
+  f.ledger.manage({ action: "void", entry_id: f.report().open_entry!.id, reason: "Owner withdrew the mistaken start" }, "void-archived-start");
   f.ledger.manage({ action: "deactivate", contractor_id: "ana", reason: "Contract ended" }, "deactivate");
   assert.equal(f.ledger.groupContractor("cht_ana"), undefined);
   assert.equal(f.ledger.clock(f.source("after-departure", "16:00"), { kind: "start", detail: "brand" }), undefined);
