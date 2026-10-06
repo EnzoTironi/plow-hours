@@ -19,7 +19,7 @@ const { WebSocketServer } = createRequire('/app/package.json')('ws');
 const token = process.env.PLOW_AGENT_TOKEN;
 if (!token) throw new Error('Pass the private plow-credentials with --env-file.');
 const toolProtocol = process.env.EVAL_PHASE === 'tool_protocol';
-const glmClock = process.env.EVAL_PHASE === 'glm_clock';
+const workerClock = ['glm_clock', 'worker_clock'].includes(process.env.EVAL_PHASE);
 const controlledRecovery = toolProtocol || process.env.EVAL_PHASE === 'group_failure';
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
@@ -202,7 +202,7 @@ if (process.env.EVAL_CODEX_AUTH) await promisify(execFile)(process.execPath, ['-
   if(!credential)throw new Error('Authorized test OAuth credentials unavailable');
   upsertAuthProfile({profileId:'openai:eval',credential});
 `], { env: process.env });
-if (controlledRecovery || glmClock) {
+if (controlledRecovery || workerClock) {
   const group = { uid: 'cht_eval_ana', status: 'active', trusted: false, participants: [owner, ana, self] };
   chats.set(group.uid, group); messages.set(group.uid, []);
   const seeded = new HoursLedger('/var/lib/plow/plow-hours');
@@ -274,7 +274,39 @@ try {
   await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
   await delay(1500);
   ledger = new HoursLedger('/var/lib/plow/plow-hours');
-  if (glmClock) {
+  if (process.env.EVAL_PHASE === 'demo_onboarding') {
+    const setup = await say(owner, home.uid, 'Opa, preciso cadastrar esse worker\n- Contractor: Alex\n- Contato: alex@example.test\n- Valor: $20/hora\n- Fuso: America/Sao_Paulo');
+    const worker = ledger.report().find(row => row.contractor.handle === alex.provider_key);
+    check('The owner can register a worker without choosing a destination or separately requesting a group', () => {
+      assert.ok(worker, 'The generic registration request must complete the hours registration');
+      assert.equal(groupRequests.length, 1); assert.equal(worker.contractor.rate_cents, 2000);
+      assert.equal(worker.contractor.timezone, 'America/Sao_Paulo');
+      assert.ok(setup.tool_calls.some(call => call.name === 'plow_start_thread'));
+      assert.ok(setup.tool_calls.some(call => call.name === 'plow_hours' && call.args.action === 'contractor'));
+      assert.ok(setup.responses.some(reply => reply.chat_uid === home.uid && reply.body.includes('https://hours.example.test/hours')));
+      assert.ok(!/Upwork|macOS|Deel|qual delas|where.{0,20}register/i.test(setup.responses.map(reply => reply.body).join('\n')));
+    });
+    const group = worker.contractor.chat_uid;
+    const began = await say(alex, group, 'Entrei agr', '2026-10-06T09:00:00-03:00');
+    check('The new group immediately accepts its worker clock', () => {
+      assert.ok(began.tool_calls.some(call => call.name === 'plow_hours_self' && call.args.action === 'start'));
+      assert.equal(ledger.report(worker.contractor.id)[0].open_entry.start_ms, Date.parse('2026-10-06T09:00:00-03:00'));
+    });
+    await say(alex, group, 'To fazendo uma animação para o Rowan', '2026-10-06T09:01:00-03:00');
+    await say(alex, group, 'Saí agora', '2026-10-06T10:00:00-03:00');
+    const earnings = await say(alex, group, 'Quanto trabalhei hoje e quanto deu?', '2026-10-06T10:01:00-03:00');
+    check('A complete new-worker cycle keeps the overview, exact hour and supplied rate', () => {
+      const row = ledger.report(worker.contractor.id)[0];
+      assert.equal(row.open_entry, null); assert.equal(row.total_hours, 1); assert.equal(row.entries.length, 1);
+      assert.match(row.entries[0].details, /Rowan/i); assert.equal(row.entries[0].rate_cents, 2000);
+      assert.ok(earnings.responses.every(reply => reply.chat_uid === group));
+      assert.match(earnings.responses.map(reply => reply.body).join('\n'), /20/);
+    });
+    check('The entire onboarding conversation uses the production frontier model and sends no internal protocol', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(request => request.response_status === 200 && request.model === 'anthropic/claude-sonnet-5'));
+      assert.ok(deliveries.every(reply => !/<tool_call|arg_value|Wait, let me/.test(reply.body)));
+    });
+  } else if (workerClock) {
     const group = chats.get('cht_eval_ana');
     const started = await say(ana, group.uid, 'Entrei agr', '2026-10-06T09:00:00-03:00');
     check('The screenshot wording invokes the real scoped clock tool instead of printing a call', () => {
@@ -298,8 +330,8 @@ try {
       assert.ok(earnings.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'report'));
       assert.match(earnings.responses.map(r => r.body).join('\n'), /30/);
     });
-    check('Every message used real GLM 5.3 Flash with only the worker tool and no internal syntax sent', () => {
-      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200 && r.model === 'z-ai/glm-5.3-flash'));
+    check('Every message used real Claude Sonnet 5 with only the worker tool and no internal syntax sent', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200 && r.model === 'anthropic/claude-sonnet-5'));
       assert.ok(modelRequests.every(r => r.tool_names.every(name => name === 'plow_hours_self')));
       assert.ok(deliveries.every(r => !/<tool_call|arg_value|Wait, let me/.test(r.body)));
     });
