@@ -18,13 +18,40 @@ entry=replaceOnce(entry,'Accepts phone numbers, not chat ids or email addresses.
 entry=replaceOnce(entry,'Sends the first message and returns the chat uid;', 'Requests the group and first message, returning a Plow chat uid. Acceptance does not verify iMessage availability or delivery. Report delivery as unconfirmed; never claim the recipient received it. Do not retry an uncertain send without the owner asking;');
 entry=replaceOnce(entry,'Use the known chat uid."', 'Use the known chat uid. An explicit owner request to send public instructions or a message to a contractor group authorizes that send, including when requested from another chat. Keep private owner reports, dashboard links and financial information in the owner DM. The receipt confirms Plow accepted the request, not iMessage delivery; never claim the recipient received it without separate evidence."');
 entry=replaceOnce(entry,'        const chat = await requestDelivery<{ uid: string }>(account, "/chats", {','        const response = await requestDelivery<unknown>(account, "/chats", {');
+const createThreadRequest = `        const response = await requestDelivery<unknown>(account, "/chats", {
+          line_uid: account.lineUid, members,
+          body: args.body, trusted, idempotency_key: idempotencyKey,
+        });`;
+entry=replaceOnce(entry,createThreadRequest,`        const contacts = [...new Set(args.members.map(normalizeHandle))].filter(handle => handle !== normalizeHandle(owner.provider_key));
+        const handle = hoursEnabled() && !trusted && contacts.length === 1 ? contacts[0] : undefined;
+        let reused = false;
+        const existing = async () => {
+          if (!handle) return undefined;
+          const found = await findContractorGroups(account, turn.chat, handle);
+          if (found.status === "ambiguous") throw new Error("Several matching contractor groups exist. Use plow_hours find_group and ask which group to use; do not create another.");
+          return found.groups[0];
+        };
+        let group = await existing();
+        let response: unknown;
+        if (group) { reused = true; response = { uid: group.chat_uid }; }
+        else {
+          try { response = await requestDelivery<unknown>(account, "/chats", {
+            line_uid: account.lineUid, members, body: args.body, trusted, idempotency_key: idempotencyKey,
+          }); }
+          catch (error) {
+            if (!(error instanceof HttpError) || error.status !== 409 || !handle) throw error;
+            group = await existing();
+            if (!group) throw new Error("Plow rejected group creation with a conflict, and no accessible matching group was found. Do not retry creation or assume the contact is invalid.");
+            reused = true; response = { uid: group.chat_uid };
+          }
+        }`);
 entry=replaceOnce(entry,'        api.logger.info(`plow started thread chat=${chat.uid}`);',`        const parsed = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
         if (!parsed.success) throw new DeliveryUnknownError();
         const chat = parsed.data;
         api.logger.info(\`plow accepted thread request chat=\${chat.uid}\`);`);
-entry=replaceOnce(entry,'        const result = { chat_uid: chat.uid, message_sent: true };',`        const result = { chat_uid: chat.uid, request_status: "accepted", delivery_status: "unconfirmed",
-          note: "Plow accepted the group and introduction request. This does not confirm iMessage availability, group visibility or receipt by any participant.",
-          ...(hoursEnabled() ? { next_step: "The group is not registered for hours yet. Complete this onboarding now with plow_hours(action=contractor), using this chat_uid and the owner's supplied name, contact, rate and timezone. Only a registered=true receipt makes it ready for clocks." } : {}) };`);
+entry=replaceOnce(entry,'        const result = { chat_uid: chat.uid, message_sent: true };',`        const result = { chat_uid: chat.uid, ...(group?.contractor_id ? { contractor_id: group.contractor_id } : {}), reused, introduction_sent: !reused, request_status: reused ? "existing" : "accepted", delivery_status: "unconfirmed",
+          note: reused ? "Reused the verified existing group. No new group or introduction message was sent." : "Plow accepted the group and introduction request. This does not confirm iMessage availability, group visibility or receipt by any participant.",
+          ...(hoursEnabled() ? { next_step: group?.contractor_id ? "This group already has a contractor registration. Reuse contractor_id; preserve its saved hours and update only the supplied setup values." : "The group is not registered for hours yet. Complete this onboarding now with plow_hours(action=contractor), using this chat_uid and the owner's supplied name, contact, rate and timezone. Only a registered=true receipt makes it ready for clocks." } : {}) };`);
 entry=replaceOnce(entry,'        const details = { message_uid: messageUid };',`        const details = { message_uid: messageUid, request_status: "accepted", delivery_status: "unconfirmed",
           note: "Plow accepted the message request. This is not an iMessage delivery or read receipt.",
           reply_instruction: "If this answered a public request originating in a group, finish with exactly NO_REPLY. Do not send a private confirmation, summary or duplicate of the public answer. If this was only a status notice for a group-origin request, continue executing the request, send the actual private answer with plow_reply_to to the verified owner DM, then finish with NO_REPLY." };`);
@@ -33,7 +60,7 @@ entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(a
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
-entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
+entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, findContractorGroups, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
 entry='import { assertHumanReply, isInternalReplyText } from "./hours-reply.ts";\n'+entry;
 entry=replaceOnce(entry,'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {',
   'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {\n  assertHumanReply(text);');

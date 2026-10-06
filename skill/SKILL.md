@@ -47,14 +47,19 @@ telling the owner it is ready to track hours.
    Then ask only for the missing hourly rate in USD and timezone. Obtain the
    owner's actual values; never guess. Use details already given and avoid a
    long initial checklist. Billing country and period are not needed to track hours.
-2. Use an existing known Plow chat uid, or `plow_start_thread` with the contractor's
+2. First call `plow_hours(action="find_group", handle="<supplied contact>")`.
+   Reuse a matching group and its contractor_id when returned. If multiple groups
+   match, ask which one to use. A failed or incomplete lookup is not proof that
+   no group exists. Only when none matches, use `plow_start_thread` with the contractor's
    phone number or iMessage email and trusted=false. The owner is included by Plow. Introduce yourself,
    say the owner asked you to track this contractor's hours and explain the messages below.
    `plow_start_thread` accepts international phone numbers and iMessage email
    handles. Use the exact supplied address, never resolve it to a guessed number.
    The owner's explicit request to create the group authorizes its introduction.
    Do not ask for a second confirmation of that same request.
-   The receipt confirms Plow accepted the request, with delivery unconfirmed.
+   A reused=true receipt means no group or introduction was created. A creation
+   conflict triggers a fresh lookup; do not retry creation blindly.
+   For a new group, the receipt confirms Plow accepted the request, with delivery unconfirmed.
    Say that plainly. A chat uid is not evidence the address has iMessage, the
    Apple group appeared or the introduction was received. Registration checks
    Plow's roster and permissions only. Do not assert anyone received a message
