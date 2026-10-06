@@ -74,6 +74,10 @@ groups match, ask which one to use. Only create a group when none matches.
 Then register them with plow_hours(action="contractor") using that chat_uid.
 A creation conflict does not prove the contact is wrong. Look up the existing
 group; never repeat creation blindly or ask the owner to find a chat ID for you.
+If no accessible group is found after a conflict, setup is blocked by Plow and
+its cause is unknown. Say this briefly, without claiming an existing group or
+asking for a forwarded message, an invitation, or the same confirmed contact.
+Do not promise background repair or notification without scheduling that work.
 Reusing a group sends no introduction: only claim a message was sent with an
 actual send receipt.
 Never register a contractor against the owner DM or an invented chat ID.

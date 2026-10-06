@@ -21,6 +21,8 @@ if (!token) throw new Error('Pass the private plow-credentials with --env-file.'
 const toolProtocol = process.env.EVAL_PHASE === 'tool_protocol';
 const workerClock = ['glm_clock', 'worker_clock'].includes(process.env.EVAL_PHASE);
 const reuseGroup = process.env.EVAL_PHASE === 'reuse_group';
+const newGroup = process.env.EVAL_PHASE === 'new_group';
+const groupConflict = process.env.EVAL_PHASE === 'group_conflict';
 const openCorrection = process.env.EVAL_PHASE === 'open_correction';
 const routingRegression = process.env.EVAL_PHASE === 'routing_regression';
 const clockConfirmation = routingRegression || process.env.EVAL_PHASE === 'clock_confirmation';
@@ -39,7 +41,7 @@ const owner = { type: 'member', uid: 'mem_eval_owner', role: 'owner', display_na
 const ana = { ...owner, uid: 'mem_eval_ana', role: 'member', display_name: 'Ana', provider_key: '+15550000002' };
 const ben = { ...ana, uid: 'mem_eval_ben', display_name: danielCycle ? 'Pueblo' : 'Ben', provider_key: 'ben@example.test' };
 const alexWrong = { ...ana, uid: 'mem_eval_alex_wrong', display_name: 'Alex', provider_key: 'alex@unreachable.example.test' };
-const alex = { ...alexWrong, uid: 'mem_eval_alex', display_name: danielCycle ? 'Daniel' : alderAttention ? 'Pueblo' : 'Alex', provider_key: danielCycle ? 'daniel@example.test' : alderAttention ? 'pueblo@example.test' : 'alex@example.test' };
+const alex = { ...alexWrong, uid: 'mem_eval_alex', display_name: danielCycle ? 'Daniel' : alderAttention ? 'Pueblo' : 'Alex', provider_key: newGroup ? 'ours-qa-contractor@icloud.com' : danielCycle ? 'daniel@example.test' : alderAttention ? 'pueblo@example.test' : 'alex@example.test' };
 const self = { type: 'agent', relationship: 'self', line: { uid: 'ln_eval', display_name: agentName } };
 const home = { uid: 'cht_eval_owner', status: 'active', trusted: false, participants: [owner, self] };
 const chats = new Map([[home.uid, home]]);
@@ -147,6 +149,7 @@ const server = createServer(async (req, res) => {
         const body = await bodyOf(req);
         if (idempotency.has(body.idempotency_key)) return json(idempotency.get(body.idempotency_key));
         groupRequests.push({ members: body.members, trusted: body.trusted });
+        if (groupConflict) return json({ error: 'Conflict' }, 409);
         if (process.env.EVAL_PHASE === 'onboarding_delivery' && body.members.includes('rejected@example.test')) return json({ error: 'Provider rejected the request' }, 422);
         const contractor = [ana, ben, alexWrong, alex].find(p => body.members.includes(p.provider_key));
         assert.ok(contractor, 'The agent must use the supplied contractor handle');
@@ -221,8 +224,8 @@ if (controlledRecovery || workerClock || openCorrection) {
     { kind: 'start', detail: 'Ours and Mac Guardian fixes' });
   seeded.close();
 }
-if (reuseGroup) {
-  const group = { uid: 'cht_eval_alex', display_name: 'Alex work hours', status: 'active', trusted: false, participants: [owner, alex, self] };
+if (reuseGroup || groupConflict) {
+  const group = { uid: 'cht_eval_alex', display_name: 'Alex work hours', status: 'active', trusted: false, participants: [owner, alex, groupConflict ? { ...self, line: { ...self.line, uid: 'ln_another_bot' } } : self] };
   chats.set(group.uid, group); messages.set(group.uid, []);
 }
 async function waitFor(fn, timeout = 180_000) {
@@ -290,10 +293,23 @@ try {
   await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
   await delay(1500);
   ledger = new HoursLedger('/var/lib/plow/plow-hours');
-  if (reuseGroup) {
+  if (groupConflict) {
     const setup = await say(owner, home.uid, 'I hired Alex, alex@example.test, $20/hour, São Paulo time. Can you create the group and register him?');
-    check('The real model discovers and registers the existing group without creating a duplicate', () => {
-      assert.equal(groupRequests.length, 0);
+    check('An unresolved conflict never registers another bot\'s group or retries creation', () => {
+      assert.equal(groupRequests.length, 1); assert.equal(ledger.report().length, 0);
+      assert.ok(setup.responses.length);
+    });
+    const followup = await say(owner, home.uid, 'The group already exists. Use it.');
+    check('An inaccessible group does not become a request for the owner to find internal identifiers', () => {
+      assert.equal(groupRequests.length, 1); assert.equal(ledger.report().length, 0);
+      assert.ok(followup.responses.length);
+      const replies = [...setup.responses, ...followup.responses].map(r => r.body).join('\n');
+      assert.doesNotMatch(replies, /chat[_ -]?(?:uid|id)|forward (?:me )?a message|add me to|different contact|try again now|says a group.*already exists/i);
+    });
+  } else if (reuseGroup || newGroup) {
+    const setup = await say(owner, home.uid, `I hired Alex, ${alex.provider_key}, $20/hour, São Paulo time. Can you create the group and register him?`);
+    check(newGroup ? 'The real model creates and registers a new group once' : 'The real model discovers and registers the existing group without creating a duplicate', () => {
+      assert.equal(groupRequests.length, newGroup ? 1 : 0);
       assert.equal(ledger.report().length, 1);
       assert.equal(ledger.report()[0].contractor.chat_uid, 'cht_eval_alex');
       assert.ok(setup.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'find_group' || c.name === 'plow_start_thread'));
@@ -302,7 +318,7 @@ try {
     });
     const repeated = await say(owner, home.uid, 'There is already a group with Alex; use that one, with the same contact and rate.');
     check('Repeating onboarding preserves the same registration and creates no group', () => {
-      assert.equal(groupRequests.length, 0); assert.equal(ledger.report().length, 1);
+      assert.equal(groupRequests.length, newGroup ? 1 : 0); assert.equal(ledger.report().length, 1);
       assert.equal(ledger.report()[0].contractor.chat_uid, 'cht_eval_alex');
       assert.ok(repeated.responses.length);
     });
@@ -602,7 +618,7 @@ try {
   } else if (process.env.EVAL_PHASE === 'onboarding_delivery') {
     const ownerText = turn => turn.responses.filter(r => r.chat_uid === home.uid).map(r => r.body).join('\n').replaceAll('’', "'");
     function unconfirmed(turn) {
-      assert.match(ownerText(turn), /unconfirmed|not confirmed|did(?: not|n't) confirm|can(?:not|'t) (?:confirm|check|verify)|haven't confirmed|could(?: not|n't) confirm|no .{0,20}(?:delivery confirmation|receipt)/i);
+      assert.match(ownerText(turn), /unconfirmed|not confirmed|isn't confirmed|did(?: not|n't) confirm|can(?:not|'t) (?:confirm|check|verify)|haven't confirmed|could(?: not|n't) confirm|no .{0,20}(?:delivery confirmation|receipt)/i);
     }
     function noFallback(turn) {
       assert.ok(!/\b(?:SMS|WhatsApp)\b|reopen Plow|restart Plow|refresh Plow/i.test(ownerText(turn)), 'No unsupported transport or invented UI fix');
