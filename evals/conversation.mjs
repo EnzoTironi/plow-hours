@@ -19,6 +19,7 @@ const { WebSocketServer } = createRequire('/app/package.json')('ws');
 const token = process.env.PLOW_AGENT_TOKEN;
 if (!token) throw new Error('Pass the private plow-credentials with --env-file.');
 const toolProtocol = process.env.EVAL_PHASE === 'tool_protocol';
+const glmClock = process.env.EVAL_PHASE === 'glm_clock';
 const controlledRecovery = toolProtocol || process.env.EVAL_PHASE === 'group_failure';
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
@@ -201,7 +202,7 @@ if (process.env.EVAL_CODEX_AUTH) await promisify(execFile)(process.execPath, ['-
   if(!credential)throw new Error('Authorized test OAuth credentials unavailable');
   upsertAuthProfile({profileId:'openai:eval',credential});
 `], { env: process.env });
-if (controlledRecovery) {
+if (controlledRecovery || glmClock) {
   const group = { uid: 'cht_eval_ana', status: 'active', trusted: false, participants: [owner, ana, self] };
   chats.set(group.uid, group); messages.set(group.uid, []);
   const seeded = new HoursLedger('/var/lib/plow/plow-hours');
@@ -273,7 +274,36 @@ try {
   await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
   await delay(1500);
   ledger = new HoursLedger('/var/lib/plow/plow-hours');
-  if (toolProtocol) {
+  if (glmClock) {
+    const group = chats.get('cht_eval_ana');
+    const started = await say(ana, group.uid, 'Entrei agr', '2026-10-06T09:00:00-03:00');
+    check('The screenshot wording invokes the real scoped clock tool instead of printing a call', () => {
+      const report = ledger.report('ana')[0];
+      assert.equal(report.entries.length, 1); assert.equal(report.open_entry.start_ms, Date.parse('2026-10-06T09:00:00-03:00'));
+      assert.ok(started.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'start'));
+      assert.ok(started.responses.length); assert.ok(started.responses.every(r => r.chat_uid === group.uid));
+    });
+    await say(ana, group.uid, 'To fazendo uma animação para o Rowan', '2026-10-06T09:10:00-03:00');
+    await say(ana, group.uid, 'Agora tô revisando o roteiro', '2026-10-06T09:30:00-03:00');
+    check('Overview and activity changes preserve the original open clock without task approval', () => {
+      const report = ledger.report('ana')[0];
+      assert.equal(report.entries.length, 1); assert.equal(report.open_entry.start_ms, Date.parse('2026-10-06T09:00:00-03:00'));
+      assert.match(report.open_entry.details, /Rowan/i); assert.match(report.open_entry.details, /roteiro/i);
+    });
+    await say(ana, group.uid, 'Saí agora', '2026-10-06T10:00:00-03:00');
+    const earnings = await say(ana, group.uid, 'How much did I work today and how much did I earn?', '2026-10-06T10:01:00-03:00');
+    check('Finishing and querying earnings use one recorded hour at the saved rate', () => {
+      const report = ledger.report('ana')[0];
+      assert.equal(report.open_entry, null); assert.equal(report.entries.length, 1); assert.equal(report.total_hours, 1);
+      assert.ok(earnings.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'report'));
+      assert.match(earnings.responses.map(r => r.body).join('\n'), /30/);
+    });
+    check('Every message used real GLM 5.3 Flash with only the worker tool and no internal syntax sent', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200 && r.model === 'z-ai/glm-5.3-flash'));
+      assert.ok(modelRequests.every(r => r.tool_names.every(name => name === 'plow_hours_self')));
+      assert.ok(deliveries.every(r => !/<tool_call|arg_value|Wait, let me/.test(r.body)));
+    });
+  } else if (toolProtocol) {
     const group = chats.get('cht_eval_ana');
     const message = { uid: 'malformed-start', direction: 'inbound', body: 'Entrei agr', sender: ana,
       created_at: '2026-10-06T09:00:00-03:00', attachments: [] };
