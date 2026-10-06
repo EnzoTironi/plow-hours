@@ -21,8 +21,8 @@ Start in your private conversation with the agent:
 > Add Alex, alex@example.com, to work on the website's landing page and checkout.
 > Create a group with us.
 
-The agent asks for the missing hourly rate and timezone, registers the assigned
-work and creates or verifies the group. Phone numbers and iMessage email
+The agent asks for the missing hourly rate and timezone and requests the group.
+Assigned work is optional context. Phone numbers and iMessage email
 addresses both work. You can include everything upfront, or answer the questions
 as they come. Country and billing dates can wait until you want to collect invoices.
 
@@ -30,17 +30,19 @@ Alex records work in that group:
 
 | Message | What happens |
 | --- | --- |
-| “Starting the landing page now.” | Opens a session against the assigned landing page work. |
+| “Starting work now.” | Opens a session immediately and asks for a short overview. |
+| “Making an animation for Rowan.” | Records the overview under the original start time. No task approval or prior registration is needed. |
 | “Taking a break.” | Closes that session. Break time does not count. |
 | “Back on the landing page.” | Opens a new session. |
 | “Also fixed checkout validation. Commit abc123.” | Adds a note, keeping the current task and clock open. |
-| “Done with the landing page. Starting checkout now.” | Ends one task and starts the next at the same message time. |
+| “Now I'm working on checkout.” | Adds an update to the same open session. |
 | “Finished for today.” | Closes the current session and adds its time to recorded hours. |
 | “Plow Hours, how many hours have I logged?” | Reports Alex's own recorded work. |
 
-Nobody needs to learn task IDs or a command syntax. When a start is clear but
-the task is ambiguous, the agent saves the original start time before asking
-which task. The answer does not move the start forward.
+Nobody needs to learn task IDs or a command syntax. Starting work opens the
+clock immediately. The description can arrive later without moving its start.
+Activity changes add updates to that session; breaks and finishing close it.
+The owner reviews hours and billing, without approving each task.
 
 The group is still a place for people to talk. “Alex, can you check the landing
 page?” is a message to Alex. The agent stays quiet. It participates when called,
@@ -161,7 +163,8 @@ message timestamp and verified sender, not a time or identity chosen by the
 model. Records commit before confirmation. Replayed messages and repeated tool
 calls cannot create a second entry for the same clock event.
 
-Each contractor has one open session. A task switch closes one block and opens
+Each contractor has one open session. Activity changes add notes to that session.
+An explicit request to split recorded blocks closes one block and opens
 the next in one transaction. Work notes preserve the current task and start
 time. Rate and timezone changes affect future starts; existing sessions keep
 their captured values.
@@ -290,6 +293,8 @@ It requires provider credentials and consumes model usage. Add
 `-e EVAL_PHASE=group_attention` to test when the agent should reply or stay quiet.
 `-e EVAL_PHASE=onboarding_delivery` tests rejected contacts, unconfirmed sends,
 missing groups and contact correction through a real model and isolated transport.
+`-e EVAL_PHASE=work_overview` tests immediate starts, free-form descriptions,
+activity updates and billing without predefined tasks or task approval.
 `-e EVAL_PHASE=group_failure` tests outage recovery through the actual gateway
 using a controlled local model fixture, without external model usage.
 These evaluations send no production messages. Live Apple iMessage delivery,
