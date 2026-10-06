@@ -25,13 +25,20 @@ entry=replaceOnce(entry,'        api.logger.info(`plow started thread chat=${cha
 entry=replaceOnce(entry,'        const result = { chat_uid: chat.uid, message_sent: true };',`        const result = { chat_uid: chat.uid, request_status: "accepted", delivery_status: "unconfirmed",
           note: "Plow accepted the group and introduction request. This does not confirm iMessage availability, group visibility or receipt by any participant." };`);
 entry=replaceOnce(entry,'        const details = { message_uid: messageUid };',`        const details = { message_uid: messageUid, request_status: "accepted", delivery_status: "unconfirmed",
-          note: "Plow accepted the message request. This is not an iMessage delivery or read receipt." };`);
+          note: "Plow accepted the message request. This is not an iMessage delivery or read receipt.",
+          reply_instruction: "If this answered a public request originating in a group, finish with exactly NO_REPLY. Do not send a private confirmation, summary or duplicate of the public answer. If this was only a status notice that you will answer privately, continue executing the request and give the actual private answer." };`);
 entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(account, \`/chats/\${to}/messages\`, { body: text, attachment_uids: attachments });
   return { channel: "plow" as const, messageId: sent.uid };`, `  const response = await requestDelivery<unknown>(account, \`/chats/\${to}/messages\`, { body: text, attachment_uids: attachments });
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
 entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { clockHours, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger } from "./hours.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
+entry='import { assertHumanReply, isInternalReplyText } from "./hours-reply.ts";\n'+entry;
+entry=replaceOnce(entry,'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {',
+  'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {\n  assertHumanReply(text);');
+entry=replaceOnce(entry,'  await runtime.channel.session.updateLastRoute({','  assertHumanReply(text);\n  await runtime.channel.session.updateLastRoute({');
+entry=replaceOnce(entry,'        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, _id, members, args.body, trusted])).digest("hex");',
+  '        assertHumanReply(args.body);\n        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, _id, members, args.body, trusted])).digest("hex");');
 entry=replaceOnce(entry,'ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {','ingress: TurnIngress, log: (text: string) => void, ownerGroup?: Chat): Promise<TurnOutcome> {');
 const kindLine='  const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";';
 const inboundKind = kindLine+'\n  const peer = { kind, id:';
@@ -94,6 +101,11 @@ entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursEnable
             return null;
           }
           if (info.kind !== "final" || isReasoningReplyPayload(payload)) return null;
+          if (isInternalReplyText(payload.text ?? "")) {
+            failure = new Error("Internal tool or reasoning protocol was blocked");
+            log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=internal_protocol\`);
+            return null;
+          }
           if ((payload.text ?? "").split("\\n").some(line => isSilentReplyText(line))) {
             silent = true;
             log(\`reply_outcome chat=\${ownerGroup?.uid ?? chat.uid} message=\${message.uid} reason=model_silent\`);
@@ -200,6 +212,21 @@ config=replaceOnce(config,'"automations", "read", "write", "edit", "exec",', '"a
 config=replaceOnce(config,'deny: ["ask_user"]', 'deny: ["ask_user", "exec", "read", "write", "edit", "apply_patch"]');
 config=replaceOnce(config,'    channels: { plow: {','    surfaces: { plow: { silentReply: { group: "allow" } } },\n    channels: { plow: {');
 config=replaceOnce(config,'  ["plow-channel", ["channels", "plow"]],','  ["plow-channel", ["channels", "plow"]],\n  ["plow-silent-reply", ["surfaces", "plow", "silentReply"]],');
+config=replaceOnce(config,
+  '{ id: "z-ai/glm-5.2", name: "GLM 5.2", input: ["text"], contextWindow: 1048576, cost: { input: 0.5544, output: 1.7424 } },',
+  '{ id: "z-ai/glm-5.3-flash", name: "GLM 5.3 Flash", reasoning: true, input: ["text", "image"], contextWindow: 1310720, maxTokens: 131072 },');
+config=replaceOnce(config,'primary: "plow/z-ai/glm-5.2"','primary: "plow/z-ai/glm-5.3-flash"');
+config=replaceOnce(config,'  for (const [file, path] of ownedPaths) {',`  for (const path of [["agents", "defaults", "model"], ["agents", "entries", "main", "model"]]) {
+    const selected = getPath(owner, path);
+    if (selected === "plow/z-ai/glm-5.2") {
+      const parent = parentAt(owner, path, false);
+      if (parent) parent.model = "plow/z-ai/glm-5.3-flash";
+    } else if (isObject(selected) && selected.primary === "plow/z-ai/glm-5.2") {
+      selected.primary = "plow/z-ai/glm-5.3-flash";
+    }
+  }
+
+  for (const [file, path] of ownedPaths) {`);
 await writeFile('/opt/plow/boot/config.ts',config);
 let identity=await readFile('/opt/plow/boot/identity.ts','utf8');
 identity=replaceOnce(identity,'      if (!identity.line.uid)',`      if (process.env.PLOW_HOURS === "1") {
@@ -237,6 +264,7 @@ for (const [source,destination] of [
   [plugin+'/hours-billing.ts',plugin+'/dist/hours-billing.js'],
   [plugin+'/hours-period.ts',plugin+'/dist/hours-period.js'],
   [plugin+'/hours-channel.ts',plugin+'/dist/hours-channel.js'],
+  [plugin+'/hours-reply.ts',plugin+'/dist/hours-reply.js'],
   [plugin+'/hours-notifications.ts',plugin+'/dist/hours-notifications.js'],
   [plugin+'/hours-web.ts',plugin+'/dist/hours-web.js'],
   ['/opt/plow/boot/config.ts','/opt/plow/boot/config.js'],

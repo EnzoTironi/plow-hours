@@ -24,9 +24,9 @@ type Dispatch = {
 };
 
 for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
-  for (const mode of ["reply", "silent", "error", "empty"]) {
+  for (const mode of ["reply", "silent", "error", "empty", "tool-syntax"]) {
     const silent = mode === "silent";
-    const failed = mode === "error" || mode === "empty";
+    const failed = mode === "error" || mode === "empty" || mode === "tool-syntax";
     test(`${route} ${mode}: model controls attention and only a completed final or deliberate silence is terminal`, async t => {
       const { server, apiBase, abortAfter } = await websocketFixture(t);
       hoursLedger().manage({ action: "contractor", id: "daniel", name: "Daniel", handle: worker.provider_key,
@@ -82,7 +82,8 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
             if (failed) {
               const rejected: ReplyPayload = mode === "error"
                 ? { text: "NO_REPLY", isError: true }
-                : { text: "No reply available", isFallbackNotice: true };
+                : mode === "empty" ? { text: "No reply available", isFallbackNotice: true }
+                : { text: '<tool_call>plow_hours_start*)\n(uid="cht_daniel"*)\nWait, let me check the available tools first.\n</arg_value><tool_call>plow_hours_self_start(work="")=' };
               assert.equal(delivery.preparePayload(rejected, { kind: "final" }), null);
               return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: mode === "error",
                 counts: { tool: 0, block: 0, final: 0 } } };
@@ -115,9 +116,13 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
       assert.deepEqual(posts, silent || failed ? [] : [{ path: `/v1/chats/${destination.uid}/messages`, body: finalText }]);
       assert.equal(hoursLedger().report("daniel")[0]?.entries.length, 0);
       assert.equal(dispatches, 1);
-      const reason = mode === "silent" ? "model_silent" : mode === "error" ? "model_error" : mode === "empty" ? "empty_reply" : "delivered";
+      const reason = mode === "silent" ? "model_silent" : mode === "error" ? "model_error" : mode === "empty" ? "empty_reply" : mode === "tool-syntax" ? "internal_protocol" : "delivered";
       assert.ok(logs.some(value => value.includes(`reply_outcome chat=${source.uid}`) && value.includes(`reason=${reason}`)), logs.join("\n"));
       if (failed) assert.ok(!logs.some(value => value.includes("stage=terminal")), "A failed or empty turn must not be completed as deliberate silence");
+      if (failed && route === "contractor-group") {
+        assert.equal(hoursLedger().isPendingClockMessage("line", group.uid, "latest-message"), true,
+          "The source stays available for retry instead of falsely completing the clock message");
+      }
     });
   }
 }

@@ -32,7 +32,7 @@ type Contractor = z.infer<typeof contractorSchema>;
 type Entry = z.infer<typeof entrySchema>;
 
 export const managementSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("contractor"), id, name: text, handle: text, chat_uid: text, timezone: text, rate_cents: z.number().int().min(0).max(100_000_000),
+  z.object({ action: z.literal("contractor"), id, name: text, handle: text, chat_uid: text.describe("Required contractor group containing the owner, this agent and exactly this worker. Use the chat_uid returned by plow_start_thread, never the owner DM."), timezone: text, rate_cents: z.number().int().min(0).max(100_000_000),
     language: z.enum(["en", "pt"]).default("pt") }).strict(),
   z.object({ action: z.literal("demand"), id, contractor_id: id, project: text, summary: text, references: z.string().max(4000).default("") }).strict(),
   z.object({ action: z.literal("correct"), entry_id: text, start: timestamp, finish: timestamp, reason: text, demand_id: id.optional() }).strict(),

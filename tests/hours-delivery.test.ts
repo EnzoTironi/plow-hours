@@ -216,6 +216,54 @@ test("durable follow-ups report acceptance only, and malformed message responses
   assert.equal(posts, 2, "An uncertain response is not retried");
 });
 
+test("explicit follow-ups and group introductions reject internal protocol before any provider POST", async t => {
+  await websocketFixture(t);
+  const posts: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    if (init.method === "POST") { posts.push(url); assert.fail("Internal protocol reached the provider"); }
+    if (url.endsWith(home.uid)) return Response.json(home);
+    if (url.endsWith(group.uid)) return Response.json(group);
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const tool = ownerTools();
+  for (const text of [
+    '<tool_call>plow_hours_self(action="start")',
+    '<tool_call',
+    '<function=plow_hours_self><arg_key>action</arg_key><arg_value>start</arg_value>',
+    '<think>Let me check the tools.</think>Recorded.',
+    '[TOOL_CALLS] [{"name":"plow_hours_self"}]',
+    '> reasoning: The owner is speaking to Alex.',
+  ]) {
+    await assert.rejects(() => tool("plow_reply_to").execute("bad-followup", { chat_uid: group.uid, text }), /Internal tool or reasoning protocol/);
+    await assert.rejects(() => tool("plow_start_thread").execute("bad-introduction", { ...introduction, body: text }), /Internal tool or reasoning protocol/);
+  }
+  assert.deepEqual(posts, []);
+});
+
+test("the shared channel sender rejects tool protocol while preserving ordinary work descriptions", async t => {
+  await websocketFixture(t);
+  const cfg = { channels: { plow: { apiBase: "http://fixture", accountId: "chat", lineUid: "line" } } };
+  let outbound: { sendText(ctx: { cfg: object; to: string; text: string; accountId: string }): Promise<unknown> } | undefined;
+  entry.register({ registrationMode: "full", logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
+    registerChannel(value: { plugin: { outbound: typeof outbound } }) { outbound = value.plugin.outbound; },
+  });
+  assert.ok(outbound);
+  const posts: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    if (url.endsWith(group.uid)) return Response.json(group);
+    assert.equal(url, `http://fixture/v1/chats/${group.uid}/messages`);
+    assert.equal(init.method, "POST");
+    posts.push(z.object({ body: z.string() }).parse(JSON.parse(String(init.body))).body);
+    return Response.json({ uid: "msg_safe_reply" });
+  });
+  await assert.rejects(() => outbound.sendText({ cfg, to: group.uid, accountId: "chat",
+    text: '<tool_call>plow_hours_self_start(work="")=' }), /Internal tool or reasoning protocol/);
+  assert.deepEqual(posts, []);
+  const text = "Started fixing tool calls in the animation for Rowan. Pix: 00000000000.";
+  await outbound.sendText({ cfg, to: group.uid, accountId: "chat", text });
+  assert.deepEqual(posts, [text]);
+});
+
 test("correcting a contact preserves earlier hours under the original sender and starts a separate registration", async t => {
   await websocketFixture(t);
   const previous = process.env.PLOW_HOURS;

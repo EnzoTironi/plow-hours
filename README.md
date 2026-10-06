@@ -53,6 +53,10 @@ own work or requested documents for recording. Plans, questions and quoted
 examples do not start a clock. The channel sends final replies only, keeping
 intermediate commentary and reasoning out of iMessage. Quiet group conversation
 also stays quiet in your private chat.
+Malformed tool syntax is rejected before sending and remains a failed turn,
+so a clock message can be retried instead of being mistaken for a saved entry.
+The default model is GLM 5.3 Flash through Plow. Updating an installation also
+replaces the previous GLM 5.2 default while keeping other model choices.
 
 Repeat the setup for each contractor. One bot serves the team, with a separate
 three-person group for each worker.

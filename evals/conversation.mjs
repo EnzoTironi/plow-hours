@@ -18,6 +18,9 @@ const { WebSocketServer } = createRequire('/app/package.json')('ws');
 
 const token = process.env.PLOW_AGENT_TOKEN;
 if (!token) throw new Error('Pass the private plow-credentials with --env-file.');
+const toolProtocol = process.env.EVAL_PHASE === 'tool_protocol';
+const glmClock = process.env.EVAL_PHASE === 'glm_clock';
+const controlledRecovery = toolProtocol || process.env.EVAL_PHASE === 'group_failure';
 const evidenceDirectory = process.env.EVAL_OUTPUT ?? '/evidence';
 await mkdir(evidenceDirectory, { recursive: true });
 const groupDelivery = process.env.EVAL_PHASE === 'alder_group_delivery';
@@ -57,7 +60,7 @@ let dashboardReads = 0;
 let modelRecovered = false;
 let unconfirmedNoticeChat;
 let noticeAttempts = 0;
-const result = () => ({ provider: 'Simulated Plow iMessage HTTP/WebSocket', model: process.env.EVAL_PHASE === 'group_failure' ? 'Controlled model failures and NO_REPLY completions for gateway recovery testing' : process.env.EVAL_CODEX_AUTH ? 'Real OpenAI gpt-6-sol via authorized Codex OAuth' : 'Real Plow model API; no model or tool mocks', production_messages_sent: false, model_requests: modelRequests.length, model_request_tools: modelRequests, tool_calls: [...toolCalls.values()], group_requests: groupRequests, checks, turns });
+const result = () => ({ provider: 'Simulated Plow iMessage HTTP/WebSocket', model: controlledRecovery ? 'Controlled model completions for gateway recovery testing' : process.env.EVAL_CODEX_AUTH ? 'Real OpenAI gpt-6-sol via authorized Codex OAuth' : 'Real Plow model API; no model or tool mocks', production_messages_sent: false, model_requests: modelRequests.length, model_request_tools: modelRequests, tool_calls: [...toolCalls.values()], group_requests: groupRequests, checks, turns });
 async function save() { await writeFile(`${evidenceDirectory}/conversation.json`, JSON.stringify(result(), null, 2) + '\n'); }
 function check(name, fn) { fn(); checks.push({ name, passed: true }); console.log('PASS ' + name); }
 function send(chat, body) {
@@ -75,13 +78,18 @@ const server = createServer(async (req, res) => {
       const request = await bodyOf(req);
       const observation = { ...activeTurn, model: request.model, tool_names: (request.tools ?? []).map(t => t.function?.name) };
       modelRequests.push(observation);
-      if (process.env.EVAL_PHASE === 'group_failure') {
-        if (!modelRecovered) return json({ error: { message: 'Controlled provider outage' } }, 503);
+      if (controlledRecovery) {
+        if (!modelRecovered && !toolProtocol) return json({ error: { message: 'Controlled provider outage' } }, 503);
+        const delta = !toolProtocol ? { content: 'NO_REPLY' }
+          : !modelRecovered ? { content: '<tool_call>plow_hours_start*)\n(uid="cht_eval_ana"*)\nWait, let me check the available tools first.\n</arg_value><tool_call>plow_hours_self_start(work="")=' }
+          : ledger?.report('ana')[0]?.open_entry ? { content: 'Clock started. What are you working on?' }
+          : { tool_calls: [{ index: 0, id: 'recovered-clock-call', type: 'function', function: { name: 'plow_hours_self', arguments: '{"action":"start"}' } }] };
+        const finish = delta.tool_calls ? 'tool_calls' : 'stop';
         const completion = { id: 'recovery', object: 'chat.completion.chunk', created: 1, model: request.model,
-          choices: [{ index: 0, delta: { role: 'assistant', content: 'NO_REPLY' }, finish_reason: null }] };
+          choices: [{ index: 0, delta: { role: 'assistant', ...delta }, finish_reason: null }] };
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         res.write(`data: ${JSON.stringify(completion)}\n\n`);
-        res.end(`data: ${JSON.stringify({ ...completion, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+        res.end(`data: ${JSON.stringify({ ...completion, choices: [{ index: 0, delta: {}, finish_reason: finish }] })}\n\ndata: [DONE]\n\n`);
         return;
       }
       for (const message of request.messages ?? []) {
@@ -95,8 +103,30 @@ const server = createServer(async (req, res) => {
         body: JSON.stringify(request), signal: AbortSignal.timeout(180_000),
       });
       observation.response_status = response.status;
+      observation.max_tokens = request.max_tokens;
+      observation.tool_schema = (request.tools ?? []).filter(t => t.function?.name === 'plow_hours').map(t => ({
+        name: t.function.name, properties: Object.keys(t.function.parameters?.properties ?? {}),
+        alternatives: (t.function.parameters?.anyOf ?? t.function.parameters?.oneOf ?? []).length,
+      }));
       res.writeHead(response.status, { 'content-type': response.headers.get('content-type') ?? 'application/json' });
-      for await (const chunk of response.body) res.write(chunk);
+      let buffered = '';
+      const decoder = new TextDecoder();
+      observation.finish_reasons = [];
+      observation.response_tool_calls = [];
+      for await (const chunk of response.body) {
+        res.write(chunk);
+        buffered += decoder.decode(chunk, { stream: true });
+        const events = buffered.split('\n'); buffered = events.pop();
+        for (const event of events) {
+          if (!event.startsWith('data: ') || event === 'data: [DONE]') continue;
+          const value = JSON.parse(event.slice(6));
+          for (const choice of value.choices ?? []) {
+            if (choice.finish_reason) observation.finish_reasons.push(choice.finish_reason);
+            for (const call of choice.delta?.tool_calls ?? []) if (call.function?.name) observation.response_tool_calls.push(call.function.name);
+          }
+          if (value.usage) observation.usage = value.usage;
+        }
+      }
       res.end();
       return;
     }
@@ -172,7 +202,7 @@ if (process.env.EVAL_CODEX_AUTH) await promisify(execFile)(process.execPath, ['-
   if(!credential)throw new Error('Authorized test OAuth credentials unavailable');
   upsertAuthProfile({profileId:'openai:eval',credential});
 `], { env: process.env });
-if (process.env.EVAL_PHASE === 'group_failure') {
+if (controlledRecovery || glmClock) {
   const group = { uid: 'cht_eval_ana', status: 'active', trusted: false, participants: [owner, ana, self] };
   chats.set(group.uid, group); messages.set(group.uid, []);
   const seeded = new HoursLedger('/var/lib/plow/plow-hours');
@@ -244,7 +274,65 @@ try {
   await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
   await delay(1500);
   ledger = new HoursLedger('/var/lib/plow/plow-hours');
-  if (process.env.EVAL_PHASE === 'group_failure') {
+  if (glmClock) {
+    const group = chats.get('cht_eval_ana');
+    const started = await say(ana, group.uid, 'Entrei agr', '2026-10-06T09:00:00-03:00');
+    check('The screenshot wording invokes the real scoped clock tool instead of printing a call', () => {
+      const report = ledger.report('ana')[0];
+      assert.equal(report.entries.length, 1); assert.equal(report.open_entry.start_ms, Date.parse('2026-10-06T09:00:00-03:00'));
+      assert.ok(started.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'start'));
+      assert.ok(started.responses.length); assert.ok(started.responses.every(r => r.chat_uid === group.uid));
+    });
+    await say(ana, group.uid, 'To fazendo uma animação para o Rowan', '2026-10-06T09:10:00-03:00');
+    await say(ana, group.uid, 'Agora tô revisando o roteiro', '2026-10-06T09:30:00-03:00');
+    check('Overview and activity changes preserve the original open clock without task approval', () => {
+      const report = ledger.report('ana')[0];
+      assert.equal(report.entries.length, 1); assert.equal(report.open_entry.start_ms, Date.parse('2026-10-06T09:00:00-03:00'));
+      assert.match(report.open_entry.details, /Rowan/i); assert.match(report.open_entry.details, /roteiro/i);
+    });
+    await say(ana, group.uid, 'Saí agora', '2026-10-06T10:00:00-03:00');
+    const earnings = await say(ana, group.uid, 'How much did I work today and how much did I earn?', '2026-10-06T10:01:00-03:00');
+    check('Finishing and querying earnings use one recorded hour at the saved rate', () => {
+      const report = ledger.report('ana')[0];
+      assert.equal(report.open_entry, null); assert.equal(report.entries.length, 1); assert.equal(report.total_hours, 1);
+      assert.ok(earnings.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'report'));
+      assert.match(earnings.responses.map(r => r.body).join('\n'), /30/);
+    });
+    check('Every message used real GLM 5.3 Flash with only the worker tool and no internal syntax sent', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200 && r.model === 'z-ai/glm-5.3-flash'));
+      assert.ok(modelRequests.every(r => r.tool_names.every(name => name === 'plow_hours_self')));
+      assert.ok(deliveries.every(r => !/<tool_call|arg_value|Wait, let me/.test(r.body)));
+    });
+  } else if (toolProtocol) {
+    const group = chats.get('cht_eval_ana');
+    const message = { uid: 'malformed-start', direction: 'inbound', body: 'Entrei agr', sender: ana,
+      created_at: '2026-10-06T09:00:00-03:00', attachments: [] };
+    messages.get(group.uid).push(message);
+    const event = JSON.stringify({ event_type: 'message_received', event_id: message.uid, chat_id: group.uid, data: { message } });
+    for (const socket of sockets) socket.send(event);
+    await waitFor(() => gatewayLog.includes(`turn failed chat=${group.uid} message=${message.uid}`));
+    check('A final containing malformed tool calls never reaches the group or confirms unsaved hours', () => {
+      assert.deepEqual(deliveries, []); assert.equal(ledger.report('ana')[0].entries.length, 0);
+      assert.equal(ledger.pendingClockMessages(self.line.uid, group.uid).length, 1);
+      assert.ok(gatewayLog.includes('reason=internal_protocol'));
+    });
+    modelRecovered = true;
+    await waitFor(() => gatewayLog.includes(`acked chat=${group.uid} message=${message.uid} stage=terminal`));
+    check('Recovery executes the registered clock tool once using the original message time', () => {
+      const report = ledger.report('ana')[0];
+      assert.equal(report.entries.length, 1); assert.equal(report.open_entry.start_ms, Date.parse(message.created_at));
+      assert.equal(deliveries.length, 1); assert.equal(deliveries[0].chat_uid, group.uid);
+      assert.ok(!/<tool_call|arg_value|Wait, let me/.test(deliveries[0].body));
+      assert.deepEqual(ledger.pendingClockMessages(self.line.uid, group.uid), []);
+    });
+    for (const socket of sockets) socket.send(event);
+    await delay(2500);
+    check('Replaying the original event neither duplicates the entry nor sends a second receipt', () => {
+      assert.equal(ledger.report('ana')[0].entries.length, 1); assert.equal(deliveries.length, 1);
+    });
+    turns.push({ sender: ana.display_name, role: ana.role, chat_uid: group.uid, message_uid: message.uid,
+      created_at: message.created_at, input: message.body, responses: deliveries.map(({ body, chat_uid }) => ({ body, chat_uid })) });
+  } else if (process.env.EVAL_PHASE === 'group_failure') {
     const group = chats.get('cht_eval_ana');
     const message = { uid: 'failed-human', direction: 'inbound', body: 'Dane, pode preencher o horário?', sender: ana, created_at: '2026-10-05T09:00:00-03:00', attachments: [] };
     messages.get(group.uid).push(message);
