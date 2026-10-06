@@ -26,14 +26,14 @@ const contractorSchema = z.object({
 });
 const demandSchema = z.object({ id, contractor_id: id, project: text, summary: text, references: z.string(), active: z.number(), reported: z.number().int().min(0).max(1) });
 const receiptSchema = z.object({ response: z.string() });
-const ownerNoticeSchema = z.object({ source: text, name: text,
+const ownerNoticeSchema = z.object({ source: text, name: text, language: z.enum(["en", "pt"]),
   kind: z.enum(["approval_revoked", "clock_review"]), body: z.string() });
 type Contractor = z.infer<typeof contractorSchema>;
 type Entry = z.infer<typeof entrySchema>;
 
 export const managementSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("contractor"), id, name: text, handle: text, chat_uid: text.describe("Required contractor group containing the owner, this agent and exactly this worker. Use the chat_uid returned by plow_start_thread, never the owner DM."), timezone: text, rate_cents: z.number().int().min(0).max(100_000_000),
-    language: z.enum(["en", "pt"]).default("pt") }).strict(),
+    language: z.enum(["en", "pt"]).default("en") }).strict(),
   z.object({ action: z.literal("demand"), id, contractor_id: id, project: text, summary: text, references: z.string().max(4000).default("") }).strict(),
   z.object({ action: z.literal("correct"), entry_id: text, start: timestamp, finish: timestamp, reason: text, demand_id: id.optional() }).strict(),
   z.object({ action: z.literal("void"), entry_id: text, reason: text }).strict(),
@@ -147,6 +147,24 @@ const RECEIPTS = {
     voided: "The owner voided this record; it doesn't count toward hours.",
   },
 } satisfies Record<Language, Record<string, string | ((...args: never[]) => string)>>;
+/** What the owner reads about a contractor's clock, in that contractor's language: the owner of a Portuguese-speaking
+ * team keeps Portuguese, everyone else reads English. */
+export const OWNER_NOTICES = {
+  pt: {
+    clockReview: (name: string, at: string, reason: string) => `${name} tem um registro de horas pendente de revisão em ${at}. ${reason} Confirme os horários corretos aqui no privado para eu ajustar o registro.`,
+    pendingStartQuestion: (at: string) => `Há também um início pendente em ${at}. Confirma que esses registros formam o mesmo período de trabalho?`,
+    startTimeQuestion: "Qual foi o horário de entrada? Confirme aqui no privado para eu consolidar esse período.",
+    stopWithoutStart: (name: string, at: string, question: string) => `${name} registrou uma saída em ${at}, mas não há um ponto de entrada aberto. ${question} As horas desse período ainda não foram contabilizadas.`,
+    approvalRevoked: (name: string) => `${name} atualizou documentos ou instruções de pagamento depois da sua aprovação. A aprovação foi revogada. Confira os dados atuais na conversa privada antes de aprovar novamente ou pagar.`,
+  },
+  en: {
+    clockReview: (name: string, at: string, reason: string) => `${name} has an hours entry waiting for review at ${at}. ${reason} Confirm the correct times here in private and I'll fix the record.`,
+    pendingStartQuestion: (at: string) => `There's also a pending start at ${at}. Do these entries make up the same work period?`,
+    startTimeQuestion: "What time did they start? Confirm it here in private and I'll complete that period.",
+    stopWithoutStart: (name: string, at: string, question: string) => `${name} sent a stop at ${at}, but no clock was running. ${question} The hours for that period aren't counted yet.`,
+    approvalRevoked: (name: string) => `${name} changed their documents or payment instructions after your approval, so the approval was revoked. Check the current details in the private conversation before approving again or paying.`,
+  },
+} satisfies Record<Language, Record<string, string | ((...args: never[]) => string)>>;
 type ConflictReason = "lateStart" | "confirmBeforeStart" | "overlaps" | "afterClose" | "stopCrosses";
 const sheetText = (value: string) => /^[=+\-@]/.test(value.trimStart()) ? `'${value}` : value;
 const markdownText = (value: string) => value.replace(/[\r\n\t]+/g, " ").replace(/[\\`*_\[\]<>#|]/g, "\\$&");
@@ -170,7 +188,7 @@ export class HoursLedger {
       CREATE TABLE IF NOT EXISTS contractors (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, handle TEXT NOT NULL UNIQUE, chat_uid TEXT NOT NULL,
         timezone TEXT NOT NULL, rate_cents INTEGER NOT NULL CHECK(rate_cents >= 0),
-        language TEXT NOT NULL DEFAULT 'pt' CHECK(language IN ('en','pt')), revision INTEGER NOT NULL DEFAULT 1,
+        language TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','pt')), revision INTEGER NOT NULL DEFAULT 1,
         sheet_id TEXT, sheet_revision INTEGER NOT NULL DEFAULT 0, wiki_revision INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS demands (
@@ -210,6 +228,7 @@ export class HoursLedger {
         if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column))
           this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} INTEGER NOT NULL DEFAULT ${column === "active" ? 1 : 0} CHECK(${column} IN (0,1))`);
       }
+      // A ledger from before contractors had a language sent every receipt in Portuguese, so it upgrades to pt.
       if (!this.db.prepare("PRAGMA table_info(contractors)").all().some(row => row.name === "language"))
         this.db.exec("ALTER TABLE contractors ADD COLUMN language TEXT NOT NULL DEFAULT 'pt' CHECK(language IN ('en','pt'))");
       if (!this.db.prepare("PRAGMA table_info(clock_inbox)").all().some(row => row.name === "review_reason"))
@@ -492,7 +511,7 @@ export class HoursLedger {
   }
 
   pendingOwnerNotices() {
-    return this.db.prepare("SELECT source, name, kind, body FROM owner_notices JOIN contractors ON contractors.id=owner_notices.contractor_id WHERE delivered=0 ORDER BY owner_notices.rowid")
+    return this.db.prepare("SELECT source, name, language, kind, body FROM owner_notices JOIN contractors ON contractors.id=owner_notices.contractor_id WHERE delivered=0 ORDER BY owner_notices.rowid")
       .all().map(row => ownerNoticeSchema.parse(row));
   }
 
@@ -504,17 +523,18 @@ export class HoursLedger {
   private queueClockReviewNotice(contractor: Contractor, input: ClockSource, reason: string) {
     const timezone = this.recordedClockSource(input)?.timezone ?? contractor.timezone;
     this.queueOwnerNotice(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, "clock_review",
-      `${contractor.name} tem um registro de horas pendente de revisão em ${localTime(Date.parse(input.created_at), timezone)}. ${reason} Confirme os horários corretos aqui no privado para eu ajustar o registro.`);
+      OWNER_NOTICES[contractor.language].clockReview(contractor.name, localTime(Date.parse(input.created_at), timezone), reason));
   }
 
   private queueStopNotice(contractor: Contractor, input: ClockSource) {
     const pending = this.pendingStart(contractor.id), finish = Date.parse(input.created_at);
     const timezone = this.recordedClockSource(input)?.timezone ?? contractor.timezone;
+    const say = OWNER_NOTICES[contractor.language];
     const question = pending && Date.parse(pending.source.created_at) < finish
-      ? `Há também um início pendente em ${localTime(Date.parse(pending.source.created_at), pending.timezone)}. Confirma que esses registros formam o mesmo período de trabalho?`
-      : "Qual foi o horário de entrada? Confirme aqui no privado para eu consolidar esse período.";
+      ? say.pendingStartQuestion(localTime(Date.parse(pending.source.created_at), pending.timezone))
+      : say.startTimeQuestion;
     this.queueOwnerNotice(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, "clock_review",
-      `${contractor.name} registrou uma saída em ${localTime(finish, timezone)}, mas não há um ponto de entrada aberto. ${question} As horas desse período ainda não foram contabilizadas.`);
+      say.stopWithoutStart(contractor.name, localTime(finish, timezone), question));
   }
 
   completeOwnerNotice(source: string) {

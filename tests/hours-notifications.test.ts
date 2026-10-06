@@ -10,7 +10,7 @@ test("approval-change alerts reach only the current private owner DM, retry fail
   process.env.PLOW_HOURS = "1";
   t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
   const ledger = hoursLedger();
-  ledger.manage({ action: "contractor", id: "ana", name: "Ana", handle: "ana@example.test", chat_uid: "cht_ana", timezone: "UTC", rate_cents: 3000 }, "profile");
+  ledger.manage({ action: "contractor", id: "ana", name: "Ana", handle: "ana@example.test", chat_uid: "cht_ana", timezone: "UTC", rate_cents: 3000, language: "pt" }, "profile");
   ledger.manage({ action: "demand", id: "work", contractor_id: "ana", project: "Site", summary: "Landing" }, "work");
   ledger.manage({ action: "manual", contractor_id: "ana", demand_id: "work", start: "2026-10-02T09:00:00Z", finish: "2026-10-02T10:00:00Z", rate_cents: 3000, reason: "Confirmed work" }, "session");
   ledger.manage({ action: "billing_request", contractor_id: "ana", country: "BR", period_start: "2026-10-02", period_end: "2026-10-02" }, "request");
@@ -84,7 +84,8 @@ test("an unmatched stop asks the owner privately for reconciliation once and a r
   const account = { apiBase: "http://notice-fixture", accountId: "chat", lineUid: "line" };
   await flushHoursNotices(account); await flushHoursNotices(account);
   assert.equal(sent.length, 1); assert.match(sent[0] ?? "", /Ana.*19:18:00 GMT-7/);
-  assert.match(sent[0] ?? "", /horário de entrada/);
+  // Ana was registered without a language, so the owner reads about her clock in English.
+  assert.match(sent[0] ?? "", /What time did they start\?/);
   const earlier = { ...source, message_uid: "arrived-late", created_at: "2026-10-05T19:03:00-07:00" };
   ledger.clock(earlier, { kind: "start", detail: "Animation for Rowan" });
   assert.equal(ledger.report("ana")[0]?.total_hours, 0.25);

@@ -61,7 +61,7 @@ test("an owner group turn keeps the original people and conversation facts while
   server.on("connection", (socket: { send: (text: string) => void }) => {
     socket.send(JSON.stringify({ event_type: "message_received", event_id: "human-question", chat_id: source.uid,
       data: { message: { uid: "human-question", sender: source.participants[0], direction: "inbound", attachments: [],
-        created_at: "2026-10-05T21:00:00Z", body: "Alder, pode pedir para o Pueblo registrar o trabalho a partir de agora por aqui?" } } }));
+        created_at: "2026-10-05T21:00:00Z", body: "Alder, can you ask Pueblo to log his work here from now on?" } } }));
   });
   const contextSchema = z.object({
     from: z.string(), route: z.object({ sessionKey: z.string() }),
@@ -103,7 +103,7 @@ test("an owner group turn keeps the original people and conversation facts while
   assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.final_reply_destination, { kind: "direct", chat_uid: destination.uid });
   assert.ok(seen.message.rawBody.includes(source.uid));
   assert.match(seen.message.rawBody, /Message origin:.*"kind":"group"/);
-  assert.ok(seen.message.rawBody.endsWith("Alder, pode pedir para o Pueblo registrar o trabalho a partir de agora por aqui?"));
+  assert.ok(seen.message.rawBody.endsWith("Alder, can you ask Pueblo to log his work here from now on?"));
   assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.participants.map(p => p.name), ["Enzo", "Pueblo", "Alder"]);
   assert.equal(seen.route.sessionKey, "agent:main:main");
   assert.equal(seen.conversation.nativeChannelId, destination.uid);

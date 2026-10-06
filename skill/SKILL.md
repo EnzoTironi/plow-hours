@@ -131,7 +131,7 @@ use confirm_start with their description or a known demand; it preserves the
 earlier time and rate. New starts use start, not clarify_start.
 
 Optional `/in <work description or known demand-id>`, `/out <details>` and `/hours` shortcuts are handled
-without a model call. Their receipts use the contractor's registered language (en or pt), a clock time and a
+without a model call. Their receipts use the contractor's registered language (en or pt; en when none was given), a clock time and a
 duration such as "5 min"; the group prompt lists the latest receipts so you can explain them when asked.
 All routes use the verified sender and original provider
 message timestamp. The model cannot choose a time, sender or another contractor.
