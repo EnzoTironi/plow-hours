@@ -74,7 +74,8 @@ billing stay with their original sender.
 Contractors use the agent through their registered group. Administration happens
 in the owner's private conversation. If the owner asks for a report, dashboard
 or administrative action in a group, the agent handles it in their private
-session and replies in their DM. Private results stay out of the contractor's
+session, posts a short "I'll reply privately" notice in that source group, and
+answers in their DM. Private results stay out of the contractor's
 conversation and agent history. Human conversation still gets no interruption.
 Public guidance for a contractor goes to their group. The owner can ask for it
 in that group or privately, and the agent sends it to the intended conversation.
