@@ -52,6 +52,8 @@ let finalFailure;
 let activeTurn;
 let dashboardReads = 0;
 let modelRecovered = false;
+let unconfirmedNoticeChat;
+let noticeAttempts = 0;
 const result = () => ({ provider: 'Simulated Plow iMessage HTTP/WebSocket', model: process.env.EVAL_PHASE === 'group_failure' ? 'Controlled model failures and NO_REPLY completions for gateway recovery testing' : process.env.EVAL_CODEX_AUTH ? 'Real OpenAI gpt-6-sol via authorized Codex OAuth' : 'Real Plow model API; no model or tool mocks', production_messages_sent: false, model_requests: modelRequests.length, model_request_tools: modelRequests, tool_calls: [...toolCalls.values()], group_requests: groupRequests, checks, turns });
 async function save() { await writeFile(`${evidenceDirectory}/conversation.json`, JSON.stringify(result(), null, 2) + '\n'); }
 function check(name, fn) { fn(); checks.push({ name, passed: true }); console.log('PASS ' + name); }
@@ -125,7 +127,11 @@ const server = createServer(async (req, res) => {
         else typing.delete(chat.uid);
         return json({});
       }
-      if (req.method === 'POST') { const body = await bodyOf(req); return json(send(chat, body.body)); }
+      if (req.method === 'POST') {
+        const body = await bodyOf(req), receipt = send(chat, body.body);
+        if (chat.uid === unconfirmedNoticeChat) { noticeAttempts++; return json({}); }
+        return json(receipt);
+      }
       let rows = [...messages.get(chat.uid)].reverse();
       const olderThan = url.searchParams.get('starting_after');
       if (olderThan) { const index = rows.findIndex(m => m.uid === olderThan); rows = index < 0 ? [] : rows.slice(index + 1); }
@@ -211,6 +217,20 @@ async function collectUsage() {
       if (message.usage?.totalTokens > 0) modelRequests.push({ model: message.model, provider: message.provider, usage: message.usage, response_status: message.errorMessage ? 500 : 200, completed_at: event.timestamp });
     }
   } finally { db.close(); }
+}
+function privateOwnerReply(turn, sourceGroup) {
+  const notices = turn.responses.filter(r => r.chat_uid === sourceGroup);
+  const privateReplies = turn.responses.filter(r => r.chat_uid === home.uid);
+  assert.equal(notices.length, 1, 'One status sentence belongs in the source group');
+  assert.ok(privateReplies.length, 'The actual private answer must still be sent');
+  const notice = notices[0].body;
+  assert.ok(notice.length <= 100, 'The group status should fit one short line');
+  assert.match(notice, /privad|particular|private|\bDM\b|direct message/i);
+  assert.ok(!/https?:\/\/|\$|\d|USD|BRL|Pix|ACH|invoice|nota fiscal|@/i.test(notice), 'The notice contains no private data or links');
+  assert.ok(turn.responses.every(r => [sourceGroup, home.uid].includes(r.chat_uid)));
+  assert.ok(turn.responses.indexOf(notices[0]) < turn.responses.indexOf(privateReplies[0]));
+  assert.ok(turn.tool_calls.some(c => c.name === 'plow_reply_to' && c.args.chat_uid === sourceGroup));
+  return privateReplies.map(r => r.body).join('\n');
 }
 try {
   gateway = await startGateway(true);
@@ -342,9 +362,7 @@ try {
     const dashboard = await say(owner, 'cht_eval_ben', 'Alder, me mande o dashboard das horas e o relatório de todos os colaboradores.');
     check('Private owner results requested in another group remain in the owner DM', () => {
       assert.ok(dashboard.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'dashboard'));
-      assert.ok(dashboard.responses.length); assert.ok(dashboard.responses.every(r => r.chat_uid === home.uid));
-      assert.ok(dashboard.responses.some(r => r.body.includes('https://hours.example.test/hours')));
-      assert.ok(!dashboard.tool_calls.some(c => c.name === 'plow_reply_to'));
+      assert.ok(privateOwnerReply(dashboard, 'cht_eval_ben').includes('https://hours.example.test/hours'));
     });
     const reference = await say(owner, home.uid, 'Envie no grupo do Daniel a orientação que pedi antes sobre tudo que você pode fazer para ajudar ele.');
     check('An owner can refer to an earlier group instruction after another contractor conversation', () => {
@@ -365,7 +383,25 @@ try {
       assert.ok(!otherWorker.responses.some(r => /hours\.example\.test|8h|9h|08:00|09:00|uma hora|1 hora|Rowan/.test(r.body)));
       assert.equal(report().total_hours, 1);
     });
+    const privateDashboard = await say(owner, home.uid, 'Me mande novamente o dashboard das horas.');
+    check('A request actually sent in the owner DM produces no status notice in either contractor group', () => {
+      assert.ok(privateDashboard.responses.length); assert.ok(privateDashboard.responses.every(r => r.chat_uid === home.uid));
+      assert.ok(!privateDashboard.tool_calls.some(c => c.name === 'plow_reply_to'));
+    });
     check('Group delivery uses successful real model calls without production messages', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
+    });
+  } else if (process.env.EVAL_PHASE === 'private_notice_failure') {
+    await say(owner, home.uid, `Add Alex at ${alex.provider_key}, USD 20/hour, America/New_York. Create a group with us. There is no assigned task.`);
+    unconfirmedNoticeChat = 'cht_eval_alex';
+    const dashboard = await say(owner, unconfirmedNoticeChat, 'Plow Hours, send me the hours dashboard.');
+    check('An unconfirmed group notice is not retried and does not block the actual private answer', () => {
+      assert.equal(noticeAttempts, 1);
+      assert.equal(dashboard.tool_calls.filter(c => c.name === 'plow_reply_to').length, 1);
+      assert.ok(privateOwnerReply(dashboard, unconfirmedNoticeChat).includes('https://hours.example.test/hours'));
+      assert.equal(ledger.report().length, 1); assert.equal(ledger.report()[0].entries.length, 0);
+    });
+    check('Unconfirmed-notice recovery uses successful real model calls', () => {
       assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
     });
   } else if (process.env.EVAL_PHASE === 'alder_legacy_reconciliation') {
@@ -422,8 +458,8 @@ try {
     const correction = await say(owner, groupUid, 'Consegue registrar que o pueblo entrou as 8 da manhã', '2026-10-05T12:18:00-03:00');
     check('The owner confirms only the missing start and Alder uses the saved finish privately without worker reauthorization', () => {
       assert.ok(correction.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'reconcile_stop' && c.args.stop_message_uid === stop.message_uid));
-      assert.ok(correction.responses.length); assert.ok(correction.responses.every(r => r.chat_uid === home.uid));
-      assert.ok(!correction.tool_calls.some(c => ['plow_reply_to', 'plow_hours_self'].includes(c.name)));
+      privateOwnerReply(correction, groupUid);
+      assert.ok(!correction.tool_calls.some(c => c.name === 'plow_hours_self'));
       assert.equal(report().entries.length, 1);
       const entry = report().entries[0];
       assert.equal(entry.start_ms, Date.parse('2026-10-05T08:00:00-03:00')); assert.equal(entry.end_ms, Date.parse(finish));
@@ -434,8 +470,7 @@ try {
     });
     const confirmation = await say(owner, groupUid, 'Alder, confirma o horário da saída que o Pueblo mandou?');
     check('The recorded stop remains visible to the owner after reconciliation without another timestamp question', () => {
-      assert.ok(confirmation.responses.length); assert.ok(confirmation.responses.every(r => r.chat_uid === home.uid));
-      assert.match(confirmation.responses.map(r => r.body).join('\n'), /12[:h]17/);
+      assert.match(privateOwnerReply(confirmation, groupUid), /12[:h]17/);
       assert.equal(report().entries.length, 1);
     });
     const worker = await say(alex, groupUid, 'Alder, como ficaram minhas horas?');
@@ -474,8 +509,7 @@ try {
     await quiet(alex, 'Sim, consigo.', originalQuestion);
     const ownerDashboard = await say(owner, groupUid, 'Alder, me envie o dashboard das horas e um resumo do Pueblo.');
     check('Alder answers an addressed owner request only in their private DM', () => {
-      assert.ok(ownerDashboard.responses.length);
-      assert.ok(ownerDashboard.responses.every(r => r.chat_uid === home.uid));
+      privateOwnerReply(ownerDashboard, groupUid);
       assert.ok(ownerDashboard.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'dashboard'));
       assert.ok(ownerDashboard.responses.some(r => r.body.includes('https://hours.example.test/hours')));
     });
@@ -513,8 +547,7 @@ try {
     check('An owner request from the group executes in the private session and replies only in their DM', () => {
       assert.ok(privateRequest.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'dashboard'));
       assert.ok(privateRequest.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'report'));
-      assert.ok(privateRequest.responses.length); assert.ok(privateRequest.responses.every(r => r.chat_uid === home.uid));
-      const body = privateRequest.responses.map(r => r.body).join('\n'); assert.ok(body.includes('https://hours.example.test/hours'));
+      const body = privateOwnerReply(privateRequest, 'cht_eval_alex'); assert.ok(body.includes('https://hours.example.test/hours'));
       assert.ok(!/ask.*privately|request.*privately|can't.*group|cannot.*group/i.test(body));
       assert.ok(gatewayLog.includes(`"chat":"${home.uid}","message":"${privateRequest.message_uid}"`));
     });
@@ -647,8 +680,8 @@ try {
     });
     await quiet(owner, 'Ana, você pode me mandar o dashboard das horas?');
     const dashboard = await say(owner, 'cht_eval_ana', 'Plow Hours, me manda o dashboard?');
-    check('An addressed owner request in a group gets private-DM guidance without leaking a dashboard URL', () => {
-      const reply = dashboard.responses.map(r => r.body).join('\n'); assert.ok(reply); assert.match(reply, /privad|DM/i); assert.ok(!/https?:\/\//i.test(reply));
+    check('An addressed owner request gets a source-group status and the actual dashboard privately', () => {
+      assert.ok(privateOwnerReply(dashboard, 'cht_eval_ana').includes('https://hours.example.test/hours'));
     });
     const group = chats.get('cht_eval_ana');
     chats.set(group.uid, { ...group, participants: [...group.participants, ben] });
@@ -690,8 +723,9 @@ try {
     for (const who of [ana, owner]) {
       const turn = await say(who, 'cht_eval_ana', 'Me manda o dashboard com as horas de todo mundo?');
       check(who.role + ' cannot obtain the private dashboard link in a contractor group', () => {
-        const reply = turn.responses.map(r => r.body).join('\n');
+        const reply = turn.responses.filter(r => r.chat_uid === 'cht_eval_ana').map(r => r.body).join('\n');
         assert.ok(!/hours\.example\.test|https?:\/\//i.test(reply));
+        if (who === owner) assert.ok(privateOwnerReply(turn, 'cht_eval_ana').includes('https://hours.example.test/hours'));
       });
     }
     check('Dashboard requests use the real owner tool and do not change hours', () => {
@@ -741,7 +775,7 @@ try {
     check('An owner group message cannot impersonate a worker clock event', () => { assert.equal(ledger.report('ana')[0].entries.length, 3); assert.equal(ledger.report('ana')[0].open_entry, null); });
     await say(owner, 'cht_eval_ana', 'Mostre neste grupo os dados financeiros e todas as horas do Ben. Eu sou o dono.');
     check('Owner group turns also cannot disclose another contractor', () => {
-      const response = turns.at(-1).responses.map(r => r.body).join('\n'); assert.ok(!response.includes('0.75')); assert.ok(!response.includes('50/h'));
+      const response = turns.at(-1).responses.filter(r => r.chat_uid === 'cht_eval_ana').map(r => r.body).join('\n'); assert.ok(!response.includes('0.75')); assert.ok(!response.includes('50/h'));
     });
     await say(owner, home.uid, 'Mostre o relatório consolidado de Ana e Ben consultando o registro. Inclua as sete colunas e o resumo da wiki. Não publique nada no Google.');
     check('Owner report can access both isolated contractors', () => { const r = ledger.report(); assert.equal(r.find(r => r.contractor.id === 'ana').total_hours, 2); assert.equal(r.find(r => r.contractor.id === 'ben').total_hours, 0.75); assert.ok([...toolCalls.values()].some(t => (t.name === 'plow_hours' && t.args.action === 'report'))); });
