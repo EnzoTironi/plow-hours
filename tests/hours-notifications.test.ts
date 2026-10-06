@@ -54,3 +54,44 @@ test("approval-change alerts reach only the current private owner DM, retry fail
   assert.ok(!sent[0]?.includes("new-pix.pdf"));
   assert.equal(ledger.pendingOwnerNotices().length, 0);
 });
+
+test("an unmatched stop asks the owner privately for reconciliation once and a recovered stop cancels its queued request", async t => {
+  await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  const ledger = hoursLedger();
+  ledger.manage({ action: "contractor", id: "ana", name: "Ana", handle: "ana@example.test", chat_uid: "cht_ana", timezone: "America/Los_Angeles", rate_cents: 2000 }, "profile");
+  const source = { line_uid: "line", chat_uid: "cht_ana", handle: "ana@example.test", message_uid: "stop",
+    body: "Finished work", created_at: "2026-10-05T19:18:00-07:00" };
+  ledger.clockAttempt(source);
+  ledger.clock(source, { kind: "stop", detail: "" });
+  ledger.clock(source, { kind: "stop", detail: "" });
+  const home = { uid: "cht_owner", status: "active", trusted: false, participants: [
+    { type: "agent", relationship: "self", line: { uid: "line" } },
+    { type: "member", role: "owner", uid: "member-owner", provider_key: "owner@example.test" },
+  ] };
+  const sent: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string, init: RequestInit = {}) => {
+    const path = new URL(input).pathname;
+    if (path === "/v1/agents/me") return Response.json({ line: { uid: "line" } });
+    if (path === "/v1/auth/owner-uid") return Response.json({ owner_uid: "owner-account" });
+    if (path === "/v1/chats") return Response.json({ data: [home], has_more: false });
+    if (path === "/v1/chats/cht_owner") return Response.json(home);
+    assert.equal(path, "/v1/chats/cht_owner/messages"); assert.equal(init.method, "POST");
+    sent.push(String(init.body)); return Response.json({ uid: "notice" });
+  });
+  const account = { apiBase: "http://notice-fixture", accountId: "chat", lineUid: "line" };
+  await flushHoursNotices(account); await flushHoursNotices(account);
+  assert.equal(sent.length, 1); assert.match(sent[0] ?? "", /Ana.*19:18:00 GMT-7/);
+  assert.match(sent[0] ?? "", /horário de entrada/);
+  const earlier = { ...source, message_uid: "arrived-late", created_at: "2026-10-05T19:03:00-07:00" };
+  ledger.clock(earlier, { kind: "start", detail: "Animation for Rowan" });
+  assert.equal(ledger.report("ana")[0]?.total_hours, 0.25);
+  assert.deepEqual(ledger.pendingOwnerNotices(), []);
+  const otherStop = { ...source, message_uid: "another-stop", created_at: "2026-10-05T20:00:00-07:00" };
+  ledger.clock(otherStop, { kind: "stop", detail: "" });
+  ledger.clock({ ...earlier, message_uid: "another-start", created_at: "2026-10-05T19:45:00-07:00" }, { kind: "start", detail: "Animation for Rowan" });
+  await flushHoursNotices(account);
+  assert.equal(sent.length, 1, "A resolved period must not send a stale reconciliation request");
+});

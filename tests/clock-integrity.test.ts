@@ -244,6 +244,71 @@ test("reconciling one stop leaves other shifts pending and a closed billing peri
   assert.deepEqual(f.report(), before);
 });
 
+test("an owner reconciles a legacy start and stop with the original rate, sources and one audited interval", t => {
+  const f = fixture(t);
+  f.ledger.manage({ ...f.profile, rate_cents: 2000, timezone: "America/Los_Angeles" }, "original-profile");
+  const start = { ...f.source("legacy-start", "19:03"), created_at: "2026-10-05T19:03:00-07:00" };
+  f.ledger.clockAttempt(start);
+  f.ledger.clock(start, { kind: "clarify_start" });
+  f.ledger.manage({ ...f.profile, rate_cents: 3500, timezone: "UTC" }, "changed-profile");
+  const stop = { ...f.source("legacy-stop", "19:18"), created_at: "2026-10-05T19:18:00-07:00" };
+  f.ledger.clockAttempt(stop);
+  f.ledger.clock(stop, { kind: "stop", detail: "Animation for Rowan" });
+  const notice = f.ledger.pendingOwnerNotices()[0];
+  assert.ok(notice); assert.equal(notice.kind, "clock_review");
+  assert.match(notice.body, /19:03:00 GMT-7/); assert.match(notice.body, /02:18:00 GMT/);
+  assert.equal(f.report().total_hours, 0);
+  f.restart();
+  const correction = { action: "reconcile_stop", contractor_id: "ana", stop_message_uid: stop.message_uid,
+    start: start.created_at, reason: "Owner confirmed these messages form one shift" };
+  const result = f.ledger.manage(correction, "confirm-pair");
+  assert.deepEqual(f.ledger.manage(correction, "confirm-pair"), result);
+  const report = f.report(), entry = report.entries[0];
+  assert.ok(entry); assert.equal(report.entries.length, 1); assert.equal(report.total_hours, 0.25);
+  assert.equal(entry.rate_cents, 2000); assert.equal(entry.timezone, "America/Los_Angeles");
+  assert.equal(entry.start_ms, Date.parse(start.created_at)); assert.equal(entry.end_ms, Date.parse(stop.created_at));
+  assert.equal(entry.start_message, JSON.stringify([start.line_uid, start.chat_uid, start.message_uid]));
+  assert.equal(entry.stop_message, JSON.stringify([stop.line_uid, stop.chat_uid, stop.message_uid]));
+  assert.equal(report.pending_clock.start, null); assert.equal(report.pending_clock.unmatched_stops, 0);
+  assert.deepEqual(f.ledger.pendingOwnerNotices(), []);
+  assert.equal(f.ledger.clockReceipt(start), f.ledger.clockReceipt(stop));
+  assert.equal(report.audit.filter(a => a.action === "reconcile_stop").length, 1);
+});
+
+test("reconciling an older stop preserves a later pending start and a replay queues only one review request", t => {
+  const f = fixture(t);
+  const start = f.source("later-start", "10:00"), stop = f.source("earlier-stop", "09:00");
+  f.ledger.clock(start, { kind: "clarify_start" });
+  f.ledger.clockAttempt(stop);
+  f.ledger.clock(stop, { kind: "stop", detail: "" });
+  f.ledger.clock(stop, { kind: "stop", detail: "" });
+  assert.equal(f.ledger.pendingOwnerNotices().length, 1);
+  f.ledger.manage({ action: "reconcile_stop", contractor_id: "ana", stop_message_uid: stop.message_uid,
+    start: "2026-10-02T08:00:00Z", reason: "Owner confirmed the earlier shift" }, "earlier-shift");
+  assert.equal(f.report().pending_clock.start, start.created_at);
+  assert.equal(f.report().total_hours, 1); assert.deepEqual(f.ledger.pendingOwnerNotices(), []);
+});
+
+test("upgrading queues existing reconciliation cases once and preserves earlier billing alerts", t => {
+  const f = fixture(t);
+  const start = f.source("legacy-start", "09:03"), stop = f.source("legacy-stop", "09:18");
+  f.ledger.clock(start, { kind: "clarify_start" });
+  f.ledger.clockAttempt(stop); f.ledger.clock(stop, { kind: "stop", detail: "Animation for Rowan" });
+  const db = new DatabaseSync(join(f.directory, "hours.sqlite"));
+  db.exec("DROP TABLE owner_notices; CREATE TABLE owner_notices (source TEXT PRIMARY KEY, contractor_id TEXT NOT NULL REFERENCES contractors(id), delivered INTEGER NOT NULL DEFAULT 0)");
+  db.prepare("INSERT INTO owner_notices(source, contractor_id) VALUES (?, ?)").run("earlier-billing-alert", "ana");
+  db.close();
+  f.restart();
+  const notices = f.ledger.pendingOwnerNotices();
+  assert.equal(notices.length, 2);
+  assert.equal(notices[0]?.kind, "approval_revoked");
+  assert.equal(notices[1]?.kind, "clock_review"); assert.match(notices[1]?.body ?? "", /09:03.*Confirma/);
+  for (const notice of notices) f.ledger.completeOwnerNotice(notice.source);
+  f.restart();
+  assert.deepEqual(f.ledger.pendingOwnerNotices(), []);
+  assert.equal(f.report().pending_clock.start, start.created_at); assert.equal(f.report().pending_clock.unmatched_stops, 1);
+});
+
 test("long sessions require owner review; archiving and deactivation preserve history and remove clock access", t => {
   const f = fixture(t);
   f.ledger.clock(f.source("long-start", "00:00"), { kind: "start", detail: "landing" });

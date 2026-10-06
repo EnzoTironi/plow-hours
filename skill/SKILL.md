@@ -24,6 +24,11 @@ do not ask the owner to send it themselves or refuse because it crosses chats.
 Conversation addressed to another human still stays silent. Billing approval
 requires an actual owner message in the private DM.
 Contractors remain limited to their own group's `plow_hours_self` tool.
+An unmatched stop or conflicting clock record queues a private review request
+for the owner. If a legacy start and stop are pending, read their saved timestamps
+and use `reconcile_stop` after the owner confirms the interval. It preserves the
+captured start rate and timezone, resolves the selected stop and records the
+correction once. Do not ask the owner to repeat a saved timestamp.
 
 ## Onboarding
 

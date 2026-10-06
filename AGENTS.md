@@ -100,6 +100,10 @@ read report.pending_clock.stops and reconcile_stop with the confirmed start and
 saved stop message UID. Its finish, rate and timezone are already captured; do
 not ask the owner to repeat a saved finish. Ask only when the intended shift or
 confirmed start is ambiguous.
+Unmatched stops and conflicting clock records queue a private reconciliation
+request to the owner. A pending legacy start can be consolidated with its saved
+stop through reconcile_stop after the owner confirms the interval. Use the saved
+timestamps; do not ask for times already recorded or invent missing ones.
 Each collaborator interacts only in their own group with the owner and this
 agent. Contractor group turns have only plow_hours_self, scoped to that group's
 registered contractor. Only contractors submit their own live clocks and documents.

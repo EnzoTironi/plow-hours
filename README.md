@@ -85,8 +85,11 @@ including a missed start, without asking the worker to repeat the clock. If the
 worker already sent a finish, the agent uses that saved timestamp and its captured
 rate and timezone. The owner only needs to supply the missing start. Corrections
 keep their source and reason in the history and never count the same stop twice.
-Billing approval
-requires their review and an actual approval message in the private conversation.
+If a stop has no open start or a clock record conflicts, the agent sends the owner
+a private request to reconcile it. A saved start and stop can be consolidated
+after the owner's confirmation, preserving the original rate and timestamps.
+Billing approval requires their review and an actual approval message in the
+private conversation.
 
 The tools check the live participants before accessing records. A group must
 contain exactly the owner, the registered contractor and the agent, with normal
