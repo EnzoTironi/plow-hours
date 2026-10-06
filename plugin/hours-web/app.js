@@ -28,6 +28,10 @@ function view() {
 function stamp(ms, timezone) {
   return new Intl.DateTimeFormat('en-US', { timeZone: timezone, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'shortOffset' }).format(ms);
 }
+function timezoneLabel(timezone) {
+  if (timezone === 'America/Sao_Paulo') return 'São Paulo time';
+  return `${timezone.split('/').at(-1).replaceAll('_', ' ')} time`;
+}
 function timeCell(value, day) {
   const cell = element('td', value.slice(11, 19));
   cell.append(element('small', [value.slice(0, 10) !== day ? value.slice(0, 10) : '', value.slice(20)].filter(Boolean).join(' · ')));
@@ -61,7 +65,7 @@ function render() {
   $('demands').replaceChildren(...people.flatMap(person => person.demands.filter(demand => !$('project').value || demand.project === $('project').value).map(demand => {
     const node = element('div', undefined, 'demand');
     const title = element('div', undefined, 'demand-title');
-    title.append(element('span', demand.project), element('code', demand.id));
+    title.append(element('span', demand.project));
     node.append(title, element('p', `${person.name} · ${demand.summary}`));
     if (demand.references) node.append(element('p', demand.references));
     return node;
@@ -78,7 +82,7 @@ function renderClocks(open, people) {
   $('open').hidden = open.length === 0 && pending.length === 0;
   $('open').replaceChildren(...open.map(row => {
     const node = element('div', undefined, 'open-clock');
-    node.append(element('span', '', 'dot'), element('strong', `${row.person.name} is working`), element('span', `${row.demand_id} · Started ${stamp(row.start_ms, row.timezone)}`), element('small', 'Excluded from recorded total'));
+    node.append(element('span', '', 'dot'), element('strong', `${row.person.name} is working`), element('span', `${row.project || "Work"} · Started ${stamp(row.start_ms, row.timezone)}`), element('small', 'Excluded from recorded total'));
     return node;
   }), ...pending.map(person => {
     const node = element('div', undefined, 'open-clock');
@@ -91,7 +95,7 @@ function renderProfiles(people) {
     const node = element('div', undefined, 'profile');
     const title = element('div', person.name, 'profile-title');
     title.append(element('span', `${money.format(person.rate_usd)} / hour`));
-    node.append(title, element('p', person.timezone));
+    node.append(title, element('p', timezoneLabel(person.timezone)));
     if (!person.active) node.append(element('p', 'Inactive · History retained'));
     if (person.pending_clock.messages) node.append(element('p', `${person.pending_clock.messages} incoming messages awaiting processing. Saved timestamps will be used when processing resumes.`));
     if (person.pending_clock.unmatched_stops) node.append(element('p', 'A finish is waiting for its matching start. Ask the agent to review it in your private chat.'));
@@ -116,7 +120,7 @@ function billingTotal(billing) {
   const amount = new Intl.NumberFormat('en-US', { style: 'currency', currency: billing.expected.currency }).format(billing.expected.amount_cents / 100);
   const unit = billing.expected.total_hours === 1 ? 'hour' : 'hours';
   const period = billing.period_start === billing.period_end ? billing.period_start : `${billing.period_start} to ${billing.period_end}`;
-  return `${amount} · ${number.format(billing.expected.total_hours)} ${unit} for ${period} in ${billing.expected.timezone}, including all projects`;
+  return `${amount} · ${number.format(billing.expected.total_hours)} ${unit} for ${period} in ${timezoneLabel(billing.expected.timezone)}, including all projects`;
 }
 function dates(range) {
   const query = new URLSearchParams();
