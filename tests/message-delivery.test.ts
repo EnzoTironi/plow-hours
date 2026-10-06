@@ -24,8 +24,10 @@ type Dispatch = {
 };
 
 for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
-  for (const silent of [false, true]) {
-    test(`${route} sends ${silent ? "nothing for a silent final" : "only the final"}, excluding commentary and reasoning`, async t => {
+  for (const mode of ["reply", "silent", "error", "empty"]) {
+    const silent = mode === "silent";
+    const failed = mode === "error" || mode === "empty";
+    test(`${route} ${mode}: model controls attention and only a completed final or deliberate silence is terminal`, async t => {
       const { server, apiBase, abortAfter } = await websocketFixture(t);
       hoursLedger().manage({ action: "contractor", id: "daniel", name: "Daniel", handle: worker.provider_key,
         chat_uid: group.uid, timezone: "America/Los_Angeles", rate_cents: 500000 }, "register-daniel");
@@ -51,19 +53,19 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
         event_type: "message_received", event_id: "latest-message", chat_id: source.uid,
         data: { message: { uid: "latest-message", sender: route === "contractor-group" ? worker : owner,
           direction: "inbound", attachments: [], created_at: "2026-10-06T00:00:00Z",
-          body: silent ? "Daniel, please set up your own account." : "Alder, how can I record hours?" } },
+          body: silent ? "Daniel, please set up your own account." : "How can I record hours?" } },
       })));
       const account = { apiBase, accountId: "chat", lineUid: "line", threadTrust: "untrusted" };
       const cfg = { agents: { entries: { main: { identity: { name: "Alder" } } } }, channels: { plow: account } };
       let channel: { gateway: { startAccount(value: object): Promise<void> } } | undefined;
-      let dispatched = false;
+      let dispatches = 0;
       const finalText = "Tell me here when you start or finish working.";
       entry.register({ registrationMode: "full", logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
         registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
         runtime: { channel: { routing: { resolveAgentRoute }, session: { resolveStorePath, updateLastRoute }, inbound: {
           buildContext(raw: unknown) { return { SessionKey: contextSchema.parse(raw).route.sessionKey }; },
           async dispatch({ replyOptions, delivery }: Dispatch) {
-            dispatched = true;
+            dispatches++;
             await replyOptions.turnAdoptionLifecycle.onAdopted();
             assert.equal(replyOptions.disableBlockStreaming, true);
             const intermediate: { payload: ReplyPayload; kind: ReplyDispatchRuntimeInfo["kind"] }[] = [
@@ -77,6 +79,14 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
               assert.equal(delivery.preparePayload(candidate.payload, { kind: candidate.kind }), null);
             }
             assert.deepEqual(posts, []);
+            if (failed) {
+              const rejected: ReplyPayload = mode === "error"
+                ? { text: "NO_REPLY", isError: true }
+                : { text: "No reply available", isFallbackNotice: true };
+              assert.equal(delivery.preparePayload(rejected, { kind: "final" }), null);
+              return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: mode === "error",
+                counts: { tool: 0, block: 0, final: 0 } } };
+            }
             const final: ReplyPayload = silent
               ? { text: "The owner is talking to Daniel.\nNO_REPLY\nI should stay quiet.", mediaUrls: ["https://private.example.test/internal.png"] }
               : { text: finalText };
@@ -94,19 +104,20 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
         } } },
       });
       assert.ok(channel);
-      const controller = abortAfter(10000);
+      const controller = abortAfter(30000);
       const logs: string[] = [];
-      // An owner group message that neither names the agent nor replies to it ends before any model turn (#19).
-      const gated = route === "owner-group" && silent;
-      const completed = route === "owner-dm" || gated ? `completed chat=${source.uid}` : "stage=terminal";
+      const completed = failed ? `turn incomplete chat=${source.uid}` : route === "owner-dm" ? `completed chat=${source.uid}` : "stage=terminal";
       await channel.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(value: string) {
         logs.push(value); if (value.includes(completed)) controller.abort();
       } } });
       assert.ok(logs.some(value => value.includes(completed)), logs.join("\n"));
       const destination = route === "contractor-group" ? group : home;
-      assert.deepEqual(posts, silent ? [] : [{ path: `/v1/chats/${destination.uid}/messages`, body: finalText }]);
+      assert.deepEqual(posts, silent || failed ? [] : [{ path: `/v1/chats/${destination.uid}/messages`, body: finalText }]);
       assert.equal(hoursLedger().report("daniel")[0]?.entries.length, 0);
-      assert.equal(dispatched, !gated);
+      assert.equal(dispatches, 1);
+      const reason = mode === "silent" ? "model_silent" : mode === "error" ? "model_error" : mode === "empty" ? "empty_reply" : "delivered";
+      assert.ok(logs.some(value => value.includes(`reply_outcome chat=${source.uid}`) && value.includes(`reason=${reason}`)), logs.join("\n"));
+      if (failed) assert.ok(!logs.some(value => value.includes("stage=terminal")), "A failed or empty turn must not be completed as deliberate silence");
     });
   }
 }

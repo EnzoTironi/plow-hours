@@ -27,7 +27,9 @@ test("BR and US invoices/payment instructions persist privately, scoped to each 
   assert.equal(ledger.billingReport("ben").payment?.method, "ach");
   assert.equal(ledger.billingReport("ana").paid, false);
   const regular = JSON.stringify([ledger.report(), hoursWebSnapshot(ledger)]);
-  for (const secret of ["ana.payments", "1234567890", "021000021", "private.example", "invoices.example"]) assert.ok(!regular.includes(secret));
+  for (const secret of ["ana.payments", "1234567890", "021000021"]) assert.ok(!regular.includes(secret));
+  assert.ok(regular.includes("https://private.example.test/ana/pix.pdf"));
+  assert.ok(regular.includes("https://invoices.example.test/ana.pdf"));
   const self = JSON.stringify(ledger.self({ action: "report" }, "ana", "report"));
   assert.ok(!self.includes("Ben Smith"));
   assert.ok(!self.includes("ana.payments"));
@@ -42,19 +44,25 @@ test("BR and US invoices/payment instructions persist privately, scoped to each 
   assert.throws(() => ledger.self({ action: "pay" }, "ana", "pay"));
 });
 
-test("financial documents require an explicit owner request and invoice replacement retains prior documents", t => {
+test("payment details can be saved before billing; invoices still match the owner's requested period", t => {
   const dir = mkdtempSync(join(tmpdir(), "hours-billing-period-"));
   const ledger = new HoursLedger(dir);
   t.after(() => { ledger.close(); rmSync(dir, { recursive: true }); });
   ledger.manage({ action: "contractor", id: "ana", name: "Ana", handle: "+15550000002", chat_uid: "cht_ana", timezone: "UTC", rate_cents: 3000 }, "register");
-  assert.throws(() => ledger.self({ action: "payment_details", payment: { method: "pix", beneficiary: "Ana", document_url: "https://private.example.test/pix.pdf" } }, "ana", "before-request"), /owner must request/);
+  const payment = { method: "pix", beneficiary: "Ana", key: "ana-payments@example.test" };
+  ledger.self({ action: "payment_details", payment }, "ana", "before-request");
+  assert.equal(ledger.billingReport("ana").requested, false);
+  assert.deepEqual(ledger.billingReport("ana").payment, payment);
+  assert.throws(() => ledger.self({ action: "tax_document", url: "https://example.test/w9.pdf" }, "ana", "before-tax-request"), /owner must request/);
   const request = { action: "billing_request", contractor_id: "ana", country: "BR", period_start: "2026-10-02", period_end: "2026-10-02" };
   ledger.manage(request, "request");
+  assert.deepEqual(ledger.billingReport("ana").payment, payment);
   const invoice = { number: "NF-1", url: "https://example.test/nf1.pdf", currency: "BRL", amount_cents: 30000, period_start: "2026-10-02", period_end: "2026-10-02" };
   ledger.self({ action: "invoice", invoice }, "ana", "invoice");
   ledger.manage(request, "repeat-request");
   assert.equal(ledger.billingReport("ana").invoice?.number, "NF-1");
   ledger.manage({ ...request, period_start: "2026-10-03", period_end: "2026-10-03" }, "next-period");
   assert.equal(ledger.billingReport("ana").invoice, null);
+  assert.deepEqual(ledger.billingReport("ana").payment, payment);
   assert.equal(ledger.billingReport("ana").paid, false);
 });

@@ -7,7 +7,7 @@ const text = z.string().trim().min(1).max(2000);
 const link = z.url().refine(value => {
   const url = new URL(value);
   return url.protocol === "https:" && !url.username && !url.password;
-}, "Use a private HTTPS document link without embedded credentials.");
+}, "Use an HTTPS document link without embedded credentials.");
 const date = z.iso.date();
 const contractorId = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
 export const billingRequestSchema = z.object({
@@ -22,17 +22,17 @@ export const billingActions = [
   z.object({ action: z.literal("approve_billing"), contractor_id: contractorId, fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
 ] as const;
 
-// Complete instructions stay in a document shared privately with the owner.
-export const paymentSchema = z.discriminatedUnion("method", [
+const documentPaymentSchema = z.discriminatedUnion("method", [
   z.object({ method: z.literal("pix"), beneficiary: text, document_url: link }).strict(),
   z.object({ method: z.literal("ach"), beneficiary: text, document_url: link, bank: text,
     account_last4: z.string().regex(/^\d{4}$/), account_type: z.enum(["checking", "savings"]) }).strict(),
 ]);
-const legacyPaymentSchema = z.discriminatedUnion("method", [
+const directPaymentSchema = z.discriminatedUnion("method", [
   z.object({ method: z.literal("pix"), beneficiary: text, key: text }).strict(),
-  z.object({ method: z.literal("ach"), beneficiary: text, bank: text, routing: z.string(), account: z.string(), account_type: z.enum(["checking", "savings"]) }).strict(),
+  z.object({ method: z.literal("ach"), beneficiary: text, bank: text, routing: z.string().regex(/^\d{9}$/),
+    account: z.string().regex(/^\d{4,17}$/), account_type: z.enum(["checking", "savings"]) }).strict(),
 ]);
-const storedPaymentSchema = z.union([paymentSchema, legacyPaymentSchema]);
+export const paymentSchema = z.union([directPaymentSchema, documentPaymentSchema]);
 const invoiceSchema = z.object({ number: text, url: link, currency: z.enum(["USD", "BRL"]),
   amount_cents: z.number().int().positive().max(1_000_000_000), period_start: date, period_end: date }).strict();
 export const billingSubmissionSchema = z.discriminatedUnion("action", [
@@ -70,13 +70,19 @@ export class HoursBilling {
     );
     CREATE TABLE IF NOT EXISTS billing_history (seq INTEGER PRIMARY KEY, contractor_id TEXT NOT NULL REFERENCES contractors(id), invoice_json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS billing_changes (seq INTEGER PRIMARY KEY, contractor_id TEXT NOT NULL REFERENCES contractors(id), action TEXT NOT NULL, before_json TEXT, after_json TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS billing_payments (contractor_id TEXT PRIMARY KEY REFERENCES contractors(id), payment_json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS billing_closures (id TEXT PRIMARY KEY, contractor_id TEXT NOT NULL REFERENCES contractors(id), start_ms INTEGER NOT NULL,
       end_ms INTEGER NOT NULL, closed INTEGER NOT NULL, snapshot_json TEXT NOT NULL, approval_digest TEXT, approved_source TEXT);`);
     if (!db.prepare("PRAGMA table_info(billing_requests)").all().some(row => row.name === "w9_required")) db.exec("ALTER TABLE billing_requests ADD COLUMN w9_required INTEGER NOT NULL DEFAULT 0");
+    db.exec("INSERT OR IGNORE INTO billing_payments(contractor_id, payment_json) SELECT contractor_id, payment_json FROM billing_requests WHERE payment_json IS NOT NULL");
   }
   private row(contractorId: string) {
     const row = this.db.prepare("SELECT * FROM billing_requests WHERE contractor_id = ?").get(contractorId);
     return row ? rowSchema.parse(row) : undefined;
+  }
+  private payment(contractorId: string) {
+    const stored = this.db.prepare("SELECT payment_json FROM billing_payments WHERE contractor_id = ?").get(contractorId);
+    return stored ? paymentSchema.parse(JSON.parse(z.object({ payment_json: z.string() }).parse(stored).payment_json)) : null;
   }
   private periodId(row: z.infer<typeof rowSchema>) { return digest([row.contractor_id, row.country, row.period_start, row.period_end]); }
   private closure(row: z.infer<typeof rowSchema>) {
@@ -129,10 +135,22 @@ export class HoursBilling {
     if (!samePeriod || before?.w9_required !== Number(input.w9_required)) this.change(input.contractor_id, "request", before ? { country: before.country, period_start: before.period_start, period_end: before.period_end } : undefined, input);
     const period = `${input.period_start} a ${input.period_end}`;
     return { ...this.report(input.contractor_id), request_text: input.country === "BR"
-      ? `Pode enviar a nota fiscal de ${period}, com link privado, número, valor e moeda (USD ou BRL conforme o acordo)? Para o Pix, envie o nome do titular e um link para um documento privado com a chave, compartilhado apenas com o dono. Não cole a chave no grupo. O dono vai conferir os dados antes de aprovar; isso não envia um pagamento.`
-      : `Please send an invoice for ${period}: a private link, number, amount and currency. For ACH, send the beneficiary, bank name, account type, last four digits and a link to the complete instructions shared privately with the owner. Keep the full account/routing numbers out of this group.${input.w9_required ? " Please also share a private W-9 document link; keep tax IDs out of chat." : ""} The owner will check the documents before approving; this does not send a payment.` };
+      ? `Pode enviar a nota fiscal de ${period}, com link, número, valor e moeda (USD ou BRL conforme o acordo)? Se o Pix ainda não estiver cadastrado, envie a chave e o nome do titular por aqui. O dono vai conferir os dados antes de aprovar; isso não envia um pagamento.`
+      : `Please send an invoice for ${period}: a link, number, amount and currency. If your ACH details aren't on file yet, send the beneficiary, bank name, account type, routing and account numbers here.${input.w9_required ? " Please also share the W-9 document link." : ""} The owner will check the documents before approving; this does not send a payment.` };
   }
   submit(contractorId: string, input: z.infer<typeof billingSubmissionSchema>) {
+    if (input.action === "payment_details") {
+      const row = this.row(contractorId);
+      if (row && (row.country === "BR") !== (input.payment.method === "pix")) throw new Error("Use Pix for this BR request or ACH for this US request.");
+      const before = this.payment(contractorId);
+      if (JSON.stringify(before) !== JSON.stringify(input.payment)) {
+        this.db.prepare(`INSERT INTO billing_payments(contractor_id, payment_json) VALUES (?, ?)
+          ON CONFLICT(contractor_id) DO UPDATE SET payment_json=excluded.payment_json`).run(contractorId, JSON.stringify(input.payment));
+        this.db.prepare("UPDATE billing_requests SET payment_json = ? WHERE contractor_id = ?").run(JSON.stringify(input.payment), contractorId);
+        this.change(contractorId, input.action, before, input.payment);
+      }
+      return this.report(contractorId);
+    }
     const row = this.row(contractorId);
     if (!row) throw new Error("The owner must request billing documents and confirm your country and period first.");
     let before: unknown, after: unknown;
@@ -143,23 +161,13 @@ export class HoursBilling {
         before = row.invoice_json ? JSON.parse(row.invoice_json) : undefined; after = input.invoice;
         if (row.invoice_json && row.invoice_json !== JSON.stringify(input.invoice)) this.db.prepare("INSERT INTO billing_history(contractor_id, invoice_json) VALUES (?, ?)").run(contractorId, row.invoice_json);
         this.db.prepare("UPDATE billing_requests SET invoice_json = ? WHERE contractor_id = ?").run(JSON.stringify(input.invoice), contractorId); break;
-      case "payment_details":
-        if ((row.country === "BR") !== (input.payment.method === "pix")) throw new Error("Use Pix for this BR request or ACH for this US request.");
-        if (row.payment_json) {
-          const previous = storedPaymentSchema.parse(JSON.parse(row.payment_json));
-          before = { fingerprint: digest(previous), beneficiary: previous.beneficiary, method: previous.method,
-            ...("document_url" in previous ? { document_url: previous.document_url } : "account" in previous ? { account_last4: previous.account.slice(-4) } : { key_masked: `…${previous.key.slice(-4)}` }) };
-        }
-        after = { fingerprint: digest(input.payment), ...input.payment };
-        this.db.prepare("UPDATE billing_requests SET payment_json = ? WHERE contractor_id = ?").run(JSON.stringify(input.payment), contractorId); break;
       case "tax_document":
         if (row.country !== "US" || !row.w9_required) throw new Error("The owner has not requested a US tax document.");
         before = row.tax_document_url; after = input.url;
         this.db.prepare("UPDATE billing_requests SET tax_document_url = ? WHERE contractor_id = ?").run(input.url, contractorId); break;
       default: { const exhaustive: never = input; return exhaustive; }
     }
-    const unchanged = input.action === "payment_details" ? row.payment_json === JSON.stringify(input.payment) : JSON.stringify(before) === JSON.stringify(after);
-    if (!unchanged) this.change(contractorId, input.action, before, after);
+    if (JSON.stringify(before) !== JSON.stringify(after)) this.change(contractorId, input.action, before, after);
     return this.report(contractorId);
   }
   closePeriod(input: z.infer<typeof billingActions[0]>) {
@@ -192,47 +200,25 @@ export class HoursBilling {
     this.db.prepare("UPDATE billing_closures SET approval_digest = ?, approved_source = ? WHERE id = ? AND closed = 1").run(fingerprint, source, this.periodId(row));
     return this.report(contractorId);
   }
-  secrets(contractorId: string, includeDocuments = false): string[] {
-    const row = this.row(contractorId);
-    if (!row) return [];
-    const payment = row.payment_json ? storedPaymentSchema.parse(JSON.parse(row.payment_json)) : null;
-    const values = payment && "key" in payment ? [payment.key] : payment && "account" in payment ? [payment.account, payment.routing] : [];
-    if (includeDocuments) {
-      if (payment && "document_url" in payment) values.push(payment.document_url);
-      if (row.invoice_json) values.push(invoiceSchema.parse(JSON.parse(row.invoice_json)).url);
-      if (row.tax_document_url) values.push(row.tax_document_url);
-      const previous = this.db.prepare(`
-        SELECT json_extract(invoice_json, '$.url') AS url FROM billing_history WHERE contractor_id=:id
-        UNION ALL SELECT CASE WHEN action='tax_document' THEN json_extract(before_json, '$')
-          ELSE COALESCE(json_extract(before_json, '$.url'), json_extract(before_json, '$.document_url')) END
-          FROM billing_changes WHERE contractor_id=:id AND action IN ('invoice','payment_details','tax_document')
-        UNION ALL SELECT CASE WHEN action='tax_document' THEN json_extract(after_json, '$')
-          ELSE COALESCE(json_extract(after_json, '$.url'), json_extract(after_json, '$.document_url')) END
-          FROM billing_changes WHERE contractor_id=:id AND action IN ('invoice','payment_details','tax_document')
-      `).all({ id: contractorId });
-      values.push(...previous.flatMap(record => typeof record.url === "string" ? [record.url] : []));
-    }
-    return values;
-  }
   report(contractorId: string) {
     const row = this.row(contractorId);
-    if (!row) return { contractor_id: contractorId, requested: false, paid: false, invoice: null, payment: null, tax_document_url: null,
+    const profile = this.payment(contractorId);
+    const payment = !row || (row.country === "BR") === (profile?.method === "pix") ? profile : null;
+    const paymentVersion = Number(this.db.prepare("SELECT COUNT(*) AS count FROM billing_changes WHERE contractor_id = ? AND action = 'payment_details'").get(contractorId)?.count ?? 0);
+    if (!row) return { contractor_id: contractorId, requested: false, paid: false, invoice: null, payment, payment_version: paymentVersion, tax_document_url: null,
       ready_for_owner_review: false, fingerprint: null, approved: false, closed: false, expected: null, discrepancy_cents: null };
     const invoice = row.invoice_json ? invoiceSchema.parse(JSON.parse(row.invoice_json)) : null;
-    const stored = row.payment_json ? storedPaymentSchema.parse(JSON.parse(row.payment_json)) : null;
-    const payment = stored && "document_url" in stored ? stored : stored?.method === "pix" ? { method: "pix", beneficiary: stored.beneficiary, legacy_details: true }
-      : stored ? { method: "ach", beneficiary: stored.beneficiary, bank: stored.bank, account_last4: stored.account.slice(-4), legacy_details: true } : null;
     const closure = this.closure(row), closed = Boolean(closure?.closed);
     const expected = closed && closure ? valueSchema.parse(JSON.parse(closure.snapshot_json)) : null;
     const discrepancy = expected && invoice?.currency === expected.currency ? invoice.amount_cents - expected.expected_amount_cents : null;
     const fingerprint = expected ? digest({ expected, invoice, payment, country: row.country, w9_required: row.w9_required, tax_document_url: row.tax_document_url }) : null;
     const pending = this.pendingClocks(contractorId);
-    const ready = Boolean(closed && !pending && invoice && payment && "document_url" in payment && discrepancy === 0 && (!row.w9_required || row.tax_document_url));
+    const ready = Boolean(closed && !pending && invoice && payment && discrepancy === 0 && (!row.w9_required || row.tax_document_url));
     return { contractor_id: contractorId, requested: true, country: row.country, period_start: row.period_start, period_end: row.period_end,
       invoice, payment, tax_document_url: row.tax_document_url, w9_required: Boolean(row.w9_required), closed, expected, discrepancy_cents: discrepancy,
       currency_matches: expected ? invoice?.currency === expected.currency : false, unresolved_clocks: pending, ready_for_owner_review: ready, fingerprint,
       approved: Boolean(ready && fingerprint === closure?.approval_digest),
-      approval_scope: "ledger_and_document_references", private_document_contents_locked: false, payment_execution_enabled: false,
-      payment_version: Number(this.db.prepare("SELECT COUNT(*) AS count FROM billing_changes WHERE contractor_id = ? AND action = 'payment_details'").get(contractorId)?.count ?? 0), paid: false };
+      approval_scope: "ledger_invoice_and_payment_instructions", private_document_contents_locked: false, payment_execution_enabled: false,
+      payment_version: paymentVersion, paid: false };
   }
 }

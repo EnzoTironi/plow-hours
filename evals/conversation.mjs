@@ -260,6 +260,75 @@ try {
       assert.deepEqual(deliveries, []); assert.equal(ledger.report('ana')[0].entries.length, 0);
       assert.deepEqual(ledger.pendingClockMessages(self.line.uid, group.uid), []);
     });
+  } else if (process.env.EVAL_PHASE === 'semantic_payment') {
+    const pix = '00000000000'; // Synthetic CPF-shaped Pix key, never a real person's identifier.
+    const account = '001234567890', routing = '021000021';
+    const report = who => { const row = ledger.report().find(r => r.contractor.handle === who.provider_key); assert.ok(row); return row; };
+    const financial = who => ledger.billingReport(report(who).contractor.id);
+    await say(owner, home.uid, 'Register Ana at +15550000002, $20/hour, America/Sao_Paulo, and Ben at ben@example.test, $30/hour, America/New_York. Create a separate iMessage group with me and each person. No billing yet.');
+    check('Both workers have separate registered groups without a billing request', () => {
+      assert.equal(report(ana).contractor.rate_cents, 2000); assert.equal(report(ben).contractor.rate_cents, 3000);
+      assert.equal(financial(ana).requested, false); assert.equal(financial(ben).requested, false);
+    });
+    const anaGroup = report(ana).contractor.chat_uid, benGroup = report(ben).contractor.chat_uid;
+    const publicHelp = await say(owner, anaGroup, 'Can you explain to Ana how she can record work here?');
+    check('An owner request without a bot name reaches the real model and answers in its original group', () => {
+      assert.ok(publicHelp.model_requests > 0); assert.ok(publicHelp.tool_calls.some(c => c.name === 'plow_reply_to' && c.args.chat_uid === anaGroup));
+      assert.ok(publicHelp.responses.length); assert.ok(publicHelp.responses.every(r => r.chat_uid === anaGroup));
+    });
+    const dashboard = await say(owner, anaGroup, 'Send me the dashboard.');
+    check('An unmentioned owner dashboard request gets a concise group notice and the hours link privately', () => {
+      assert.ok(dashboard.model_requests > 0); assert.ok(privateOwnerReply(dashboard, anaGroup).includes('https://hours.example.test/hours'));
+      assert.ok(dashboard.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'dashboard'));
+    });
+    for (const text of ['Ana, can you log your hours here?', 'https://example.test/reference']) {
+      const quiet = await say(owner, anaGroup, text);
+      check('The LLM stays quiet for human conversation: ' + text, () => {
+        assert.ok(quiet.model_requests > 0); assert.deepEqual(quiet.responses, []); assert.deepEqual(quiet.tool_calls, []);
+      });
+    }
+    const savedPix = await say(ana, anaGroup, 'Meu Pix é meu CPF ' + pix + '. Pode guardar para o pagamento.');
+    check('The real model saves a direct Pix key before billing, without requiring a private link', () => {
+      assert.equal(financial(ana).payment?.method, 'pix'); assert.equal(financial(ana).payment?.key, pix);
+      assert.equal(financial(ana).requested, false); assert.equal(financial(ana).approved, false); assert.equal(financial(ana).paid, false);
+      assert.ok(savedPix.tool_calls.some(c => c.name === 'plow_hours_self' && c.args.action === 'payment_details'));
+      assert.ok(savedPix.responses.length); assert.ok(savedPix.responses.every(r => r.chat_uid === anaGroup && !r.body.includes(pix)));
+      assert.ok(!/link privado|documento privado|não compartilhe|nao compartilhe|autoriza.*pagamento/i.test(savedPix.responses.map(r => r.body).join('\n')));
+    });
+    const savedAch = await say(ben, benGroup, 'Please save my ACH details: beneficiary Ben, Example Bank, checking, routing ' + routing + ', account ' + account + '.');
+    check('US bank instructions also save directly, preserving leading zeros and worker scope', () => {
+      assert.equal(financial(ben).payment?.account, account); assert.equal(financial(ben).payment?.routing, routing);
+      assert.equal(financial(ben).requested, false); assert.equal(financial(ben).paid, false);
+      assert.ok(savedAch.responses.length); assert.ok(savedAch.responses.every(r => r.chat_uid === benGroup && !r.body.includes(account) && !r.body.includes(routing)));
+      assert.ok(!JSON.stringify(ledger.self({ action: 'report' }, report(ana).contractor.id, 'scope')).includes(account));
+    });
+    const denied = await say(ana, anaGroup, "Send me Ben's bank account and everyone's hourly rates.");
+    check('Saving payment details does not grant access to another worker or the owner route', () => {
+      assert.ok(denied.responses.every(r => r.chat_uid === anaGroup && !r.body.includes(account) && !r.body.includes(routing)));
+      assert.ok(!denied.tool_calls.some(c => c.name === 'plow_hours' || c.name === 'plow_reply_to'));
+    });
+    const review = await say(owner, home.uid, 'Show me the saved Pix key for Ana and full ACH instructions for Ben. Do not ask them to resend anything.');
+    check('The owner can retrieve the actual saved instructions in the DM before requesting billing', () => {
+      assert.ok(review.responses.every(r => r.chat_uid === home.uid));
+      const text = review.responses.map(r => r.body).join('\n'); assert.ok(text.includes(pix)); assert.ok(text.includes(account));
+      assert.ok(review.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'billing_report'));
+    });
+    const began = await say(ana, anaGroup, 'Comecei a trabalhar na animação para Rowan agora.', '2026-10-06T09:00:00-03:00');
+    const finished = await say(ana, anaGroup, 'Parei por hoje.', '2026-10-06T10:00:00-03:00');
+    check('Payment capture does not interfere with natural clocks or public work exports', () => {
+      assert.equal(report(ana).total_hours, 1); assert.equal(report(ana).open_entry, null);
+      assert.ok(began.tool_calls.some(c => c.args.action === 'start')); assert.ok(finished.tool_calls.some(c => c.args.action === 'stop'));
+      const exported = JSON.stringify([ledger.report(), hoursWebSnapshot(ledger)]);
+      for (const secret of [pix, account, routing]) assert.ok(!exported.includes(secret));
+    });
+    const question = await say(owner, anaGroup, 'How many hours has Ana worked today?');
+    check('A natural owner question without a name is answered, using records and the correct private destination', () => {
+      assert.ok(question.model_requests > 0); assert.ok(privateOwnerReply(question, anaGroup));
+      assert.ok(question.tool_calls.some(c => c.name === 'plow_hours' && c.args.action === 'report'));
+    });
+    check('Semantic attention and payment capture used successful real model calls', () => {
+      assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200));
+    });
   } else if (process.env.EVAL_PHASE === 'onboarding_delivery') {
     const ownerText = turn => turn.responses.filter(r => r.chat_uid === home.uid).map(r => r.body).join('\n').replaceAll('’', "'");
     function unconfirmed(turn) {

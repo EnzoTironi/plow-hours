@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { billingActions, billingReportSchema, billingRequestSchema, HoursBilling, selfSchema } from "./hours-billing.ts";
-import { entrySchema, needsReview, periodBounds, periodValue, workText } from "./hours-period.ts";
+import { entrySchema, needsReview, periodBounds, periodValue } from "./hours-period.ts";
 
 export const hoursEnabled = () => process.env.PLOW_HOURS === "1";
 const id = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
@@ -150,12 +150,6 @@ const RECEIPTS = {
 type ConflictReason = "lateStart" | "confirmBeforeStart" | "overlaps" | "afterClose" | "stopCrosses";
 const sheetText = (value: string) => /^[=+\-@]/.test(value.trimStart()) ? `'${value}` : value;
 const markdownText = (value: string) => value.replace(/[\r\n\t]+/g, " ").replace(/[\\`*_\[\]<>#|]/g, "\\$&");
-function workRecord(value: unknown, secrets: readonly string[]): unknown {
-  if (typeof value === "string") return workText(value, secrets);
-  if (Array.isArray(value)) return value.map(item => workRecord(item, secrets));
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, workRecord(item, secrets)]));
-  return value;
-}
 export const SHEET_HEADERS = ["Day", "Start", "Finish", "Total (Hours)", "Rate (USD)", "Project", "Details (github ticket, git commit, etc)"];
 
 export class HoursLedger {
@@ -354,7 +348,7 @@ export class HoursLedger {
     this.db.prepare(`INSERT INTO clock_inbox(source, contractor_id, line_uid, chat_uid, source_json, rate_cents, timezone)
       VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
       .run(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, input.line_uid, input.chat_uid,
-        JSON.stringify({ ...input, body: workText(input.body, this.billing.secrets(contractor.id)) }), contractor.rate_cents, contractor.timezone);
+        JSON.stringify(input), contractor.rate_cents, contractor.timezone);
   }
 
   clockAttempt(input: ClockSource): number {
@@ -426,10 +420,10 @@ export class HoursLedger {
     if (ms > Date.parse(input.created_at)) return this.clockConflict(contractor, input, "confirmBeforeStart");
     const source = JSON.stringify([origin.source.line_uid, origin.source.chat_uid, origin.source.message_uid]);
     const assigned = this.db.prepare("SELECT * FROM demands WHERE id = ? AND contractor_id = ? AND active=1 AND reported=0").get(command.detail, contractor.id);
-    const description = workText(command.description ?? (assigned ? "" : command.detail), this.billing.secrets(contractor.id));
+    const description = command.description ?? (assigned ? "" : command.detail);
     const demand = assigned ? demandSchema.parse(assigned) : {
       id: `activity_${createHash("sha256").update(source).digest("hex").slice(0,24)}`, contractor_id: contractor.id,
-      project: workText(command.project ?? "Uncategorized", this.billing.secrets(contractor.id)),
+      project: command.project ?? "Uncategorized",
       summary: description.slice(0,2000) || "Work in progress", references: "", active: 1, reported: 1,
     };
     const waiting = this.unmatchedStops(contractor.id)
@@ -473,10 +467,10 @@ export class HoursLedger {
 
   private finishClock(active: Entry, ms: number, details: string, source: string) {
     this.billing.assertUnlocked(active.contractor_id, active.start_ms, ms);
-    const clean = workText([active.details, details].filter(Boolean).join("\n"), this.billing.secrets(active.contractor_id));
-    this.db.prepare("UPDATE entries SET end_ms=?, details=?, stop_message=? WHERE id=?").run(ms, clean, source, active.id);
+    const recordedDetails = [active.details, details].filter(Boolean).join("\n");
+    this.db.prepare("UPDATE entries SET end_ms=?, details=?, stop_message=? WHERE id=?").run(ms, recordedDetails, source, active.id);
     this.bump(active.contractor_id);
-    this.audit(source, "stop", active, { ...active, end_ms: ms, details: clean, stop_message: source });
+    this.audit(source, "stop", active, { ...active, end_ms: ms, details: recordedDetails, stop_message: source });
     const language = this.contractor(active.contractor_id).language;
     return RECEIPTS[language].stopped(clockTime(ms, active.timezone, language), duration(ms - active.start_ms), ms - active.start_ms > 12 * 3_600_000);
   }
@@ -551,12 +545,12 @@ export class HoursLedger {
       } else if (command.kind === "note") {
         if (!active) response = say.noteNoClock;
         else {
-          const details = workText([active.details, command.detail].filter(Boolean).join("\n"), this.billing.secrets(contractor.id));
+          const details = [active.details, command.detail].filter(Boolean).join("\n");
           const demand = demandSchema.parse(this.db.prepare("SELECT * FROM demands WHERE contractor_id=? AND id=?").get(contractor.id, active.demand_id));
           const project = demand.reported && demand.project === "Uncategorized" && command.project
-            ? workText(command.project, this.billing.secrets(contractor.id)) : demand.project;
+            ? command.project : demand.project;
           if (demand.reported) this.db.prepare("UPDATE demands SET summary=?, project=? WHERE contractor_id=? AND id=?")
-            .run(active.details ? demand.summary : workText(command.detail, this.billing.secrets(contractor.id)).slice(0,2000),
+            .run(active.details ? demand.summary : command.detail.slice(0,2000),
               project, contractor.id, active.demand_id);
           this.db.prepare("UPDATE entries SET details=? WHERE id=?").run(details, active.id);
           this.bump(contractor.id);
@@ -577,7 +571,7 @@ export class HoursLedger {
         response = this.startClock(contractor, input, command);
       } else if (!active) {
         this.db.prepare("INSERT INTO unmatched_stops(source, contractor_id, source_json, details) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING")
-          .run(source, contractor.id, JSON.stringify({ ...input, body: "" }), workText(command.detail, this.billing.secrets(contractor.id)));
+          .run(source, contractor.id, JSON.stringify({ ...input, body: "" }), command.detail);
         this.billing.invalidateApproval(contractor.id);
         this.queueStopNotice(contractor, input);
         response = say.stopNoClock;
@@ -662,11 +656,10 @@ export class HoursLedger {
           if (this.overlaps(contractor.id, start, finish, entryId)) throw new Error("The correction overlaps another time entry.");
           const assigned = input.demand_id ? this.db.prepare("SELECT * FROM demands WHERE id=? AND contractor_id=?").get(input.demand_id, contractor.id) : undefined;
           if (input.demand_id && !assigned) throw new Error("The referenced demand does not belong to this contractor.");
-          const secrets = this.billing.secrets(contractor.id);
-          const details = workText([input.details, stop.details].filter(Boolean).join("\n"), secrets);
+          const details = [input.details, stop.details].filter(Boolean).join("\n");
           const demand = assigned ? demandSchema.parse(assigned) : {
             id: `activity_${createHash("sha256").update(stop.source).digest("hex").slice(0,24)}`,
-            project: workText(input.project ?? "Uncategorized", secrets), summary: details.slice(0,2000) || "Work session",
+            project: input.project ?? "Uncategorized", summary: details.slice(0,2000) || "Work session",
           };
           if (!assigned) this.db.prepare('INSERT INTO demands(id, contractor_id, project, summary, "references", reported) VALUES (?, ?, ?, ?, ?, 1)')
             .run(demand.id, contractor.id, demand.project, demand.summary, "");
@@ -771,7 +764,7 @@ export class HoursLedger {
           this.billing.assertUnlocked(contractor.id, start, finish);
           if (this.overlaps(contractor.id, start, finish, entryId)) throw new Error("Manual entry overlaps another time entry.");
           this.db.prepare("INSERT INTO entries(id, contractor_id, demand_id, start_ms, end_ms, rate_cents, timezone, details, start_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .run(entryId, contractor.id, input.demand_id, start, finish, input.rate_cents, contractor.timezone, workText(input.details, this.billing.secrets(contractor.id)), receiptKey);
+            .run(entryId, contractor.id, input.demand_id, start, finish, input.rate_cents, contractor.timezone, input.details, receiptKey);
           this.bump(contractor.id);
           this.audit(source, input.action, undefined, { ...input, entry_id: entryId });
           return { entry_id: entryId, recorded: true };
@@ -818,11 +811,8 @@ export class HoursLedger {
     const contractors = contractorId ? [this.contractor(contractorId)]
       : this.db.prepare("SELECT * FROM contractors ORDER BY id").all().map(row => contractorSchema.parse(row));
     return contractors.map(contractor => {
-      const secrets = this.billing.secrets(contractor.id, true);
-      const demands = this.db.prepare("SELECT * FROM demands WHERE contractor_id = ? ORDER BY id").all(contractor.id).map(row => demandSchema.parse(row))
-        .map(d => ({ ...d, project: workText(d.project, secrets), summary: workText(d.summary, secrets), references: workText(d.references, secrets) }));
-      const entries = this.db.prepare("SELECT * FROM entries WHERE contractor_id = ? ORDER BY start_ms, id").all(contractor.id).map(row => entrySchema.parse(row))
-        .map(e => ({ ...e, details: workText(e.details, secrets) }));
+      const demands = this.db.prepare("SELECT * FROM demands WHERE contractor_id = ? ORDER BY id").all(contractor.id).map(row => demandSchema.parse(row));
+      const entries = this.db.prepare("SELECT * FROM entries WHERE contractor_id = ? ORDER BY start_ms, id").all(contractor.id).map(row => entrySchema.parse(row));
       const rows: (string | number)[][] = [SHEET_HEADERS];
       let duration = 0;
       for (const entry of entries) {
@@ -853,10 +843,9 @@ export class HoursLedger {
         review_needed: entries.filter(needsReview).map(e => e.id),
         pending_clock: { start: this.pendingStart(contractor.id)?.source.created_at ?? null, timezone: this.pendingStart(contractor.id)?.timezone ?? null, unmatched_stops: stops.length, messages: this.pendingClockMessagesForContractor(contractor.id).length,
           stops: stops.map(stop => ({ message_uid: stop.message.message_uid, created_at: stop.message.created_at,
-            timezone: stop.timezone, details: workText(stop.details, secrets) })),
+            timezone: stop.timezone, details: stop.details })),
           reviews: this.db.prepare("SELECT source, json_extract(source_json, '$.created_at') AS created_at, review_reason FROM clock_inbox WHERE contractor_id=? AND review_reason!='' ORDER BY created_at").all(contractor.id) },
-        audit: this.db.prepare("SELECT * FROM audit WHERE COALESCE(json_extract(after_json, '$.contractor_id'), json_extract(after_json, '$.id')) = ? ORDER BY seq").all(contractor.id)
-          .map(row => ({ ...row, before_json: row.before_json === null ? null : JSON.stringify(workRecord(JSON.parse(String(row.before_json)), secrets)), after_json: JSON.stringify(workRecord(JSON.parse(String(row.after_json)), secrets)) })),
+        audit: this.db.prepare("SELECT * FROM audit WHERE COALESCE(json_extract(after_json, '$.contractor_id'), json_extract(after_json, '$.id')) = ? ORDER BY seq").all(contractor.id),
         revision: contractor.revision,
         sheet: { url: contractor.sheet_id ? `https://docs.google.com/spreadsheets/d/${contractor.sheet_id}/edit` : null, tab: "Hours", range: "Hours!A1:G", values: rows, tsv, pending: contractor.sheet_revision < contractor.revision },
         wiki: { relative_path: `_raw/contractor-hours/${contractor.id}.md`, markdown: wiki, pending: contractor.wiki_revision < contractor.revision },

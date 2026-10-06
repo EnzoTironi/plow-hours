@@ -121,18 +121,30 @@ test("currency conversion and W-9 requirements come from the owner, and changing
   assert.throws(() => f.ledger.self({ action: "tax_document", url: "https://private.example.test/w9.pdf" }, "ana", "tax-br"), /not requested/);
 });
 
-test("full bank keys and numbers are rejected, and legacy v4 data stays masked and cannot be approved", t => {
+test("direct Pix details bind the billing approval to the exact key; legacy data upgrades without a replacement link", t => {
   const f = fixture(t); f.request(); f.manual(); f.invoice();
-  assert.throws(() => f.ledger.self({ action: "payment_details", payment: { method: "pix", beneficiary: "Ana", key: "private-pix-key" } }, "ana", "raw-pix"));
+  const payment = { method: "pix", beneficiary: "Ana", key: "ana-payments@example.test" };
+  f.ledger.self({ action: "payment_details", payment }, "ana", "raw-pix");
   assert.throws(() => f.ledger.self({ action: "payment_details", payment: { method: "ach", beneficiary: "Ana", bank: "Bank", routing: "021000021", account: "1234567890", account_type: "checking" } }, "ana", "raw-ach"));
   assert.throws(() => f.pix("Ana", "https://user:secret@private.example.test/pix.pdf"));
+  f.close();
+  const before = f.report();
+  assert.deepEqual(before.payment, payment);
+  assert.ok(before.ready_for_owner_review && before.fingerprint);
+  f.ledger.manage({ action: "approve_billing", contractor_id: "ana", fingerprint: before.fingerprint }, "approval");
+  f.ledger.self({ action: "payment_details", payment: { ...payment, key: "updated-payments@example.test" } }, "ana", "raw-pix-update");
+  assert.equal(f.report().approved, false);
+  assert.notEqual(f.report().fingerprint, before.fingerprint);
+  assert.ok(!JSON.stringify(f.ledger.report()).includes(payment.key));
   const db = new DatabaseSync(join(f.directory, "hours.sqlite"));
+  db.exec("DROP TABLE billing_payments");
   db.prepare("UPDATE billing_requests SET payment_json=? WHERE contractor_id='ana'").run(JSON.stringify({ method: "pix", beneficiary: "Ana", key: "private-pix-key" }));
   db.close();
-  f.close();
-  assert.ok(!JSON.stringify(f.report()).includes("private-pix-key"));
-  assert.equal(f.report().ready_for_owner_review, false);
-  f.pix(); assert.equal(f.report().ready_for_owner_review, true);
+  const upgraded = new HoursLedger(f.directory);
+  t.after(() => upgraded.close());
+  assert.deepEqual(upgraded.billingReport("ana").payment, { method: "pix", beneficiary: "Ana", key: "private-pix-key" });
+  assert.equal(upgraded.billingReport("ana").ready_for_owner_review, true);
+  assert.equal(upgraded.billingReport("ana").approved, false);
 });
 
 test("open clocks, unresolved messages and unreviewed long entries block billing closure", t => {
