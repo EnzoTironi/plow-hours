@@ -8,7 +8,7 @@ Each contractor gets a group with you and Ours. They tell the agent when
 they start, take a break, switch tasks or finish. You get a private view of the
 team's hours, the work behind them and the paperwork needed before payday.
 
-[Set up Ours](https://aiworthusing.com/agent-index/plow-hours) ·
+[Set up Ours](https://aiworthusing.com/agent-index/ours) ·
 [Watch it work](https://youtu.be/TLfrcTrz52c) ·
 [Latest release](https://github.com/EnzoTironi/plow-hours/releases/latest)
 
@@ -55,8 +55,9 @@ intermediate commentary and reasoning out of iMessage. Quiet group conversation
 also stays quiet in your private chat.
 Malformed tool syntax is rejected before sending and remains a failed turn,
 so a clock message can be retried instead of being mistaken for a saved entry.
-The default model is GLM 5.3 Flash through Plow. Updating an installation also
-replaces the previous GLM 5.2 default while keeping other model choices.
+The default model is Claude Sonnet 5 through Plow, with GPT 6 Sol as fallback.
+Updating an installation replaces the previous GLM defaults while keeping other
+model choices.
 
 Repeat the setup for each contractor. One bot serves the team, with a separate
 three-person group for each worker.
@@ -226,7 +227,7 @@ separately from work entries.
 
 ## Install
 
-For a hosted installation, open [Ours on the Agent Index](https://aiworthusing.com/agent-index/plow-hours)
+For a hosted installation, open [Ours on the Agent Index](https://aiworthusing.com/agent-index/ours)
 and use its setup flow. Once it is running, text your agent's line and start with
 the first contractor. Ask for the dashboard in your private conversation.
 
@@ -246,7 +247,7 @@ plow-agents deploy --local --line ln_xxx
 
 Check that `profile --show` displays the intended account. Replace `ln_xxx` with
 a free line from `lines`. Local deploy writes the line-scoped `plow-credentials`
-and builds and starts this checkout's Compose stack. `AGENT_ID=plow-hours` is
+and builds and starts this checkout's Compose stack. `AGENT_ID=ours` is
 already set by the image and Compose configuration. Model requests require
 available usage on the configured provider.
 
@@ -325,6 +326,8 @@ docker run --rm --env-file plow-credentials \
 ```
 
 It requires provider credentials and consumes model usage. Add
+`-e EVAL_PHASE=demo_onboarding` to test a natural owner registration request,
+group creation and registration, then the worker's complete clock and earnings cycle.
 `-e EVAL_PHASE=group_attention` to test when the agent should reply or stay quiet.
 `-e EVAL_PHASE=onboarding_delivery` tests rejected contacts, unconfirmed sends,
 missing groups and contact correction through a real model and isolated transport.
@@ -352,9 +355,9 @@ the workflow pushes their images through the official Plow CLI and publishes a
 shared public GHCR manifest. Promote that manifest's immutable digest:
 
 ```sh
-plow-agents image promote plow-hours \
+plow-agents image promote ours \
   ghcr.io/enzotironi/plow-hours@sha256:YOUR_RELEASE_DIGEST
-plow-agents image show plow-hours
+plow-agents image show ours
 ```
 
 Use the real 64-character digest for the release. Promotion updates the image

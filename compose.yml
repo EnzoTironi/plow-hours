@@ -1,10 +1,10 @@
 services:
   agent:
     build: .
-    image: ghcr.io/enzotironi/plow-hours:v5.7.2
+    image: ghcr.io/enzotironi/plow-hours:v5.7.3
     env_file: ./plow-credentials
     environment:
-      AGENT_ID: plow-hours
+      AGENT_ID: ours
       AGENT_NAME: Ours
       PLOW_HOURS_LOCAL: "1"
       AGENT_BLURB: Track contractor hours in iMessage. Keep the timesheet and invoice paperwork in one place.
