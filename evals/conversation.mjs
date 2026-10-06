@@ -293,6 +293,11 @@ try {
       assert.equal(ledger.report(worker.contractor.id)[0].open_entry.start_ms, Date.parse('2026-10-06T09:00:00-03:00'));
     });
     await say(alex, group, 'To fazendo uma animação para o Rowan', '2026-10-06T09:01:00-03:00');
+    const update = await say(alex, group, 'Sim, continuo na animação.', '2026-10-06T09:02:00-03:00');
+    check('A casual work update produces no visible message classification and keeps the original clock', () => {
+      assert.equal(ledger.report(worker.contractor.id)[0].open_entry.start_ms, Date.parse('2026-10-06T09:00:00-03:00'));
+      assert.ok(update.responses.every(reply => reply.chat_uid === group && !/this is just|no clock action needed|does not need a reply/i.test(reply.body)));
+    });
     await say(alex, group, 'Saí agora', '2026-10-06T10:00:00-03:00');
     const earnings = await say(alex, group, 'Quanto trabalhei hoje e quanto deu?', '2026-10-06T10:01:00-03:00');
     check('A complete new-worker cycle keeps the overview, exact hour and supplied rate', () => {

@@ -233,6 +233,9 @@ test("explicit follow-ups and group introductions reject internal protocol befor
     '<think>Let me check the tools.</think>Recorded.',
     '[TOOL_CALLS] [{"name":"plow_hours_self"}]',
     '> reasoning: The owner is speaking to Alex.',
+    "This is just a casual comment confirming he's working, no clock action needed - already recorded as note.",
+    "The latest message does not need a reply; I should stay quiet.",
+    "Isso é apenas um comentário casual, não precisa de resposta.",
   ]) {
     await assert.rejects(() => tool("plow_reply_to").execute("bad-followup", { chat_uid: group.uid, text }), /Internal tool or reasoning protocol/);
     await assert.rejects(() => tool("plow_start_thread").execute("bad-introduction", { ...introduction, body: text }), /Internal tool or reasoning protocol/);
