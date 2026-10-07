@@ -92,6 +92,7 @@ export function duration(ms: number) {
   const h = Math.floor(seconds / 3600), m = Math.floor(seconds / 60) % 60, s = seconds % 60;
   return [h ? `${h} h` : "", m ? `${m} min` : "", s ? `${s} s` : ""].filter(Boolean).join(" ") || (ms > 0 ? "<1 s" : "0 min");
 }
+const usd = (cents: number) => `USD ${(cents / 100).toFixed(2)}`;
 /** Every clock receipt a contractor reads, in the language they were registered with. Shortcut commands send these
  * without a model turn, so they must already be in the contractor's language. Owner notices keep their own copy. */
 const RECEIPTS = {
@@ -279,9 +280,10 @@ export class HoursLedger {
         : { start_ms: Number.MIN_SAFE_INTEGER, end_ms: Number.MAX_SAFE_INTEGER };
       const value = periodValue(report.entries, bounds);
       return { contractor: { id: report.contractor.id, name: report.contractor.name, timezone: report.contractor.timezone,
-          local_date: localTime(Date.now(), report.contractor.timezone).slice(0, 10), rate_cents: report.contractor.rate_cents },
+          local_date: localTime(Date.now(), report.contractor.timezone).slice(0, 10), rate_cents: report.contractor.rate_cents,
+          hourly_rate_text: `${usd(report.contractor.rate_cents)}/hour` },
         demands: report.demands.filter(d => d.active && !d.reported), total_hours: value.total_hours,
-        earnings: { currency: "USD", amount_usd_cents: value.amount_usd_cents, duration_ms: value.duration_ms, duration_text: duration(value.duration_ms),
+        earnings: { currency: "USD", amount_usd_cents: value.amount_usd_cents, amount_text: usd(value.amount_usd_cents), duration_ms: value.duration_ms, duration_text: duration(value.duration_ms),
           period_start: input.period_start ?? null, period_end: input.period_end ?? null, timezone: report.contractor.timezone,
           basis: "Closed recorded intervals at their captured rates; excludes open, unmatched and voided time. Not approval or payment." },
         pending_start: this.pendingStart(contractorId)?.source.created_at ?? null,
@@ -289,7 +291,7 @@ export class HoursLedger {
         open_entry: report.open_entry ? { start_ms: report.open_entry.start_ms, details: report.open_entry.details, rate_cents: report.open_entry.rate_cents, timezone: report.open_entry.timezone } : null,
         clock_language: "Use start immediately for clear work beginning now, even without a task or description. details records the worker's own overview; project is optional and must come from context. Ask what they are working on after recording the start. Their answer and later activity changes use note, keeping that clock open. Assigned demands are optional context, never required or approved tasks. confirm_start is only for a legacy pending start. Never clock uncertain intent, plans, questions, negations or historical statements.",
         entries: report.entries.filter(e => !e.voided && e.start_ms < bounds.end_ms && (e.end_ms ?? Number.MAX_SAFE_INTEGER) > bounds.start_ms)
-          .map(({ demand_id, start_ms, end_ms, details, rate_cents, timezone }) => ({ demand_id, start_ms, end_ms, details, rate_cents, timezone })),
+          .map(({ demand_id, start_ms, end_ms, details, rate_cents, timezone }) => ({ demand_id, start_ms, end_ms, details, rate_cents, hourly_rate_text: `${usd(rate_cents)}/hour`, timezone })),
         review_needed: report.review_needed,
         billing: (() => { const { fingerprint, expected, ...status } = this.billingReport(contractorId); return status; })() };
     }

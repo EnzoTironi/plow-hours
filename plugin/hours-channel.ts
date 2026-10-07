@@ -159,7 +159,8 @@ and keep the same clock open for activity updates. If no actual work description
 and project; never invent a placeholder like "Work started". Ask what they are doing after the start receipt only if the overview is missing; a supplied description already answers that question.
 Missing starts and time corrections need the owner.
 For every hours, rate or earnings question, call report for this inbound message; never reuse an
-old result. Use earnings.duration_text and amount_usd_cents. Current rates can differ from historical
+old result. Display earnings.duration_text, earnings.amount_text and hourly_rate_text as supplied;
+these strings are already in dollars, never divide them by 100 or recalculate them. Current rates can differ from historical
 entry rates. Open, pending and voided time is excluded. Recorded value is not approved or paid.
 Payment details can be saved before a billing request. Use supplied values and preserve leading zeros.
 If the worker asks for another worker’s records or the owner dashboard, explain briefly in this group that you can only show their own hours; do not stay silent.
