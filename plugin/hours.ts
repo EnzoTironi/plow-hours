@@ -86,10 +86,11 @@ export function clockTime(ms: number, timezone: string, language: Language) {
   return new Intl.DateTimeFormat(language === "pt" ? "pt-BR" : "en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit",
     ...(saoPaulo ? {} : { timeZoneName: "short" as const }), ...(day(ms) === day(Date.now()) ? {} : { month: "short", day: "numeric" }) }).format(ms) + label;
 }
-/** A receipt duration: "5 min", "1 h 20 min". The ledger keeps the exact interval. */
+/** Human duration without rounding partial minutes into extra recorded work. */
 export function duration(ms: number) {
-  const minutes = Math.max(ms > 0 ? 1 : 0, Math.round(ms / 60_000)), h = Math.floor(minutes / 60), m = minutes % 60;
-  return h ? `${h} h${m ? ` ${m} min` : ""}` : `${m} min`;
+  const seconds = Math.floor(Math.max(0, ms) / 1000);
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds / 60) % 60, s = seconds % 60;
+  return [h ? `${h} h` : "", m ? `${m} min` : "", s ? `${s} s` : ""].filter(Boolean).join(" ") || (ms > 0 ? "<1 s" : "0 min");
 }
 /** Every clock receipt a contractor reads, in the language they were registered with. Shortcut commands send these
  * without a model turn, so they must already be in the contractor's language. Owner notices keep their own copy. */
@@ -105,7 +106,7 @@ const RECEIPTS = {
     pendingCancelled: "Início pendente cancelado. Nenhuma hora foi registrada.",
     clarifyStart: (at: string) => `Recebi seu início às ${at}. Qual demanda você está fazendo? Vou manter esse horário quando você confirmar.`,
     noPendingStart: "Não há um início pendente desta conversa para confirmar. Me diga quando começar uma demanda.",
-    started: (at: string, work: string) => `Ponto iniciado às ${at}.${work ? ` Trabalho: ${work}.` : ""}`,
+    started: (at: string, work: string) => `Ponto iniciado às ${at}.${work ? ` Trabalho: ${work}.` : " O que você está fazendo?"}`,
     recoveredStop: (stop: string) => ` O encerramento que chegou antes também foi recuperado: ${stop}`,
     stopped: (at: string, total: string, long: boolean) => `Ponto encerrado às ${at}. Total: ${total}.${long ? " Esse bloco passou de 12 horas e precisa da revisão do dono antes do fechamento." : ""}`,
     statusOpen: (at: string, work: string) => `Ponto aberto desde ${at}.${work ? ` Trabalho: ${work}` : ""}`,
@@ -132,7 +133,7 @@ const RECEIPTS = {
     pendingCancelled: "Pending start cancelled. No hours were recorded.",
     clarifyStart: (at: string) => `Got your start at ${at}. What are you working on? I'll keep that start time when you confirm.`,
     noPendingStart: "There's no pending start in this conversation to confirm. Tell me when you start working.",
-    started: (at: string, work: string) => `Clock started at ${at}.${work ? ` Work: ${work}.` : ""}`,
+    started: (at: string, work: string) => `Clock started at ${at}.${work ? ` Work: ${work}.` : " What are you working on?"}`,
     recoveredStop: (stop: string) => ` The stop that arrived earlier was recovered too: ${stop}`,
     stopped: (at: string, total: string, long: boolean) => `Clock stopped at ${at}. Total: ${total}.${long ? " This block is over 12 hours and needs the owner's review before it closes." : ""}`,
     statusOpen: (at: string, work: string) => `Clock running since ${at}.${work ? ` Work: ${work}` : ""}`,
@@ -275,7 +276,7 @@ export class HoursLedger {
       return { contractor: { id: report.contractor.id, name: report.contractor.name, timezone: report.contractor.timezone,
           local_date: localTime(Date.now(), report.contractor.timezone).slice(0, 10), rate_cents: report.contractor.rate_cents },
         demands: report.demands.filter(d => d.active && !d.reported), total_hours: value.total_hours,
-        earnings: { currency: "USD", amount_usd_cents: value.amount_usd_cents, duration_ms: value.duration_ms,
+        earnings: { currency: "USD", amount_usd_cents: value.amount_usd_cents, duration_ms: value.duration_ms, duration_text: duration(value.duration_ms),
           period_start: input.period_start ?? null, period_end: input.period_end ?? null, timezone: report.contractor.timezone,
           basis: "Closed recorded intervals at their captured rates; excludes open, unmatched and voided time. Not approval or payment." },
         pending_start: this.pendingStart(contractorId)?.source.created_at ?? null,
