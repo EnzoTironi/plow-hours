@@ -515,17 +515,17 @@ export class HoursLedger {
   private queueClockReviewNotice(contractor: Contractor, input: ClockSource, reason: string) {
     const timezone = this.recordedClockSource(input)?.timezone ?? contractor.timezone;
     this.queueOwnerNotice(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, "clock_review",
-      `${contractor.name} tem um registro de horas pendente de revisão em ${localTime(Date.parse(input.created_at), timezone)}. ${reason} Confirme os horários corretos aqui no privado para eu ajustar o registro.`);
+      `${contractor.name} tem um registro de horas pendente de revisão em ${clockTime(Date.parse(input.created_at), timezone, "pt")}. ${reason} Confirme os horários corretos aqui no privado para eu ajustar o registro.`);
   }
 
   private queueStopNotice(contractor: Contractor, input: ClockSource) {
     const pending = this.pendingStart(contractor.id), finish = Date.parse(input.created_at);
     const timezone = this.recordedClockSource(input)?.timezone ?? contractor.timezone;
     const question = pending && Date.parse(pending.source.created_at) < finish
-      ? `Há também um início pendente em ${localTime(Date.parse(pending.source.created_at), pending.timezone)}. Confirma que esses registros formam o mesmo período de trabalho?`
+      ? `Há também um início pendente em ${clockTime(Date.parse(pending.source.created_at), pending.timezone, "pt")}. Confirma que esses registros formam o mesmo período de trabalho?`
       : "Qual foi o horário de entrada? Confirme aqui no privado para eu consolidar esse período.";
     this.queueOwnerNotice(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, "clock_review",
-      `${contractor.name} registrou uma saída em ${localTime(finish, timezone)}, mas não há um ponto de entrada aberto. ${question} As horas desse período ainda não foram contabilizadas.`);
+      `${contractor.name} registrou uma saída em ${clockTime(finish, timezone, "pt")}, mas não há um ponto de entrada aberto. ${question} As horas desse período ainda não foram contabilizadas.`);
   }
 
   completeOwnerNotice(source: string) {

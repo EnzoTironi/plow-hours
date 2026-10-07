@@ -255,7 +255,7 @@ test("an owner reconciles a legacy start and stop with the original rate, source
   f.ledger.clock(stop, { kind: "stop", detail: "Animation for Rowan" });
   const notice = f.ledger.pendingOwnerNotices()[0];
   assert.ok(notice); assert.equal(notice.kind, "clock_review");
-  assert.match(notice.body, /19:03:00 GMT-7/); assert.match(notice.body, /02:18:00 GMT/);
+  assert.match(notice.body, /19:03.*GMT-7/); assert.match(notice.body, /02:18.*(?:UTC|GMT)/);
   assert.equal(f.report().total_hours, 0);
   f.restart();
   const correction = { action: "reconcile_stop", contractor_id: "ana", stop_message_uid: stop.message_uid,
