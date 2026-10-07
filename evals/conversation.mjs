@@ -758,6 +758,27 @@ try {
       assert.deepEqual(deliveries, []); assert.equal(ledger.report('ana')[0].entries.length, 0);
       assert.deepEqual(ledger.pendingClockMessages(self.line.uid, group.uid), []);
     });
+  } else if (process.env.EVAL_PHASE === 'payment_change') {
+    chats.set('cht_eval_ana', { uid: 'cht_eval_ana', status: 'active', trusted: false, participants: [owner, ana, self] });
+    messages.set('cht_eval_ana', []);
+    ledger.manage({ action: 'contractor', id: 'ana', name: 'Ana', handle: ana.provider_key, chat_uid: 'cht_eval_ana', timezone: 'America/Sao_Paulo', rate_cents: 3000 }, 'fixture-profile');
+    ledger.manage({ action: 'demand', contractor_id: 'ana', id: 'work', project: 'Website', summary: 'Landing' }, 'fixture-work');
+    ledger.manage({ action: 'manual', contractor_id: 'ana', demand_id: 'work', start: '2026-10-02T09:00:00-03:00', finish: '2026-10-02T11:00:00-03:00', rate_cents: 3000, reason: 'Fixture completed work' }, 'fixture-hours');
+    ledger.manage({ action: 'billing_request', contractor_id: 'ana', country: 'BR', period_start: '2026-10-02', period_end: '2026-10-02' }, 'fixture-request');
+    ledger.self({ action: 'invoice', invoice: { number: 'NF-42', url: 'https://invoices.example.test/ana/nf-42.pdf', currency: 'USD', amount_cents: 6000, period_start: '2026-10-02', period_end: '2026-10-02' } }, 'ana', 'fixture-invoice');
+    ledger.self({ action: 'payment_details', payment: { method: 'pix', beneficiary: 'Ana Silva', key: 'ana.payments@example.test' } }, 'ana', 'fixture-payment');
+    ledger.manage({ action: 'close_period', contractor_id: 'ana' }, 'fixture-close');
+    ledger.manage({ action: 'approve_billing', contractor_id: 'ana', fingerprint: ledger.billingReport('ana').fingerprint }, 'fixture-approval');
+    const changed = await say(ana, 'cht_eval_ana', 'Mudei minhas instruções de Pix. Novo titular Ana Novo, minha nova chave Pix é ana.new.payments@example.test.');
+    check('Real worker payment change saves the destination and revokes the prior approval', () => {
+      const billing = ledger.billingReport('ana'); assert.equal(billing.approved, false); assert.equal(billing.payment.key, 'ana.new.payments@example.test'); assert.equal(billing.payment_version, 2);
+      const privateReplies = changed.responses.filter(r => r.chat_uid === home.uid), publicReplies = changed.responses.filter(r => r.chat_uid === 'cht_eval_ana');
+      assert.equal(privateReplies.length, 1); assert.match(privateReplies[0].body, /aprova.*revogada/i); assert.equal(publicReplies.length, 1);
+      assert.ok(!/não altera.{0,20}aprova|aprova.{0,20}(?:mantida|inalterada)/i.test(publicReplies[0].body));
+      assert.ok(!changed.responses.some(r => r.body.includes('ana.new.payments@example.test')));
+      assert.deepEqual(ledger.pendingOwnerNotices(), []);
+    });
+    check('Payment-change conversation uses successful real Luna calls', () => { assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200)); });
   } else if (process.env.EVAL_PHASE === 'semantic_payment') {
     const pix = '00000000000'; // Synthetic CPF-shaped Pix key, never a real person's identifier.
     const account = '001234567890', routing = '021000021';
@@ -1487,7 +1508,8 @@ try {
     check('Natural destination change revokes old approval and versions the instructions', () => { const r = ledger.billingReport('ana'); assert.equal(r.approved, false); assert.equal(r.payment_version, 2); });
     check('An approved payment change also alerts the owner privately without exposing document links', () => {
       const alerts = changedPayment.responses.filter(r => r.chat_uid === home.uid);
-      assert.equal(alerts.length, 1); assert.match(alerts[0].body, /aprova.*revogada/i); assert.ok(!alerts[0].body.includes('https://'));
+      assert.equal(alerts.length, 1); assert.match(alerts[0].body, /aprova.*revogada/i);
+      assert.ok(!changedPayment.responses.filter(r => r.chat_uid === 'cht_eval_ana').some(r => /n[aã]o altera.{0,20}aprova|aprova.{0,20}(?:mantida|inalterada)/i.test(r.body)), 'Worker confirmation must not contradict the revoked approval'); assert.ok(!alerts[0].body.includes('https://'));
       assert.deepEqual(ledger.pendingOwnerNotices(), []);
     });
     await collectUsage();
