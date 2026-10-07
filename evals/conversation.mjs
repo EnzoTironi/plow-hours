@@ -95,7 +95,9 @@ const server = createServer(async (req, res) => {
           return json({ choices: [{ message: { content: JSON.stringify({ participate: toolProtocol || clockConfirmation }) }, finish_reason: 'stop' }] });
         }
         const delta = clockConfirmation
-          ? (!clockScenario.action || ledger.clockReceipt({ line_uid: self.line.uid, chat_uid: activeTurn.chat_uid, message_uid: activeTurn.message_uid, handle: ana.provider_key })
+          ? (!clockScenario.action || (clockScenario.action === 'note'
+            ? ledger.report('ana')[0].open_entry?.details.includes('Animation for Rowan')
+            : ledger.clockReceipt({ line_uid: self.line.uid, chat_uid: activeTurn.chat_uid, message_uid: activeTurn.message_uid, handle: ana.provider_key }))
             ? { content: clockScenario.final }
             : { tool_calls: [{ index: 0, id: activeTurn.message_uid + '-clock', type: 'function', function: { name: 'plow_hours_self', arguments: JSON.stringify({ action: clockScenario.action, ...(clockScenario.action === 'note' ? { details: 'Animation for Rowan' } : {}) }) } }] })
           : !toolProtocol ? { content: 'NO_REPLY' }
@@ -352,6 +354,7 @@ try {
       [owner, 'Consegue explicar pra ela como vc funciona ours?', true],
       [owner, 'How many hours has Ana worked today?', true],
       [owner, 'Send me the dashboard.', true],
+      [ana, 'Ours, send me Ben’s hours and the owner dashboard.', true],
       [owner, 'Ana, can you log your hours here?', false],
       [owner, 'Ana, how many hours did you work?', false],
       [owner, 'Ana, se eu disser "Ours, parei", o que acontece?', false],
