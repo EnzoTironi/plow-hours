@@ -13,7 +13,7 @@ test("CEO spec: the installed OpenClaw variant exposes Ours, its owner tool and 
   assert.equal(cfg.agents.entries.main.identity.name, "Ours");
   assert.ok(cfg.tools.alsoAllow.includes("plow_hours"));
   assert.equal(cfg.channels.plow.threadTrust, "untrusted");
-  assert.match(readFileSync("/opt/plow/skills/contractor-hours/SKILL.md", "utf8"), /Use `plow_hours` from the owner's main Plow DM/);
+  assert.match(readFileSync("/opt/plow/skills/contractor-hours/SKILL.md", "utf8"), /# Ours operations/);
   assert.match(readFileSync("/opt/plow/prompt/AGENTS.md", "utf8"), /You are Ours/);
 });
 

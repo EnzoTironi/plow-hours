@@ -92,9 +92,9 @@ separate.
 
 Contractors use the agent through their registered group. Administration happens
 in the owner's private conversation. If the owner asks for a report, dashboard
-or administrative action in a group, the agent handles it in their private
-session, posts a short "I'll reply privately" notice in that source group, and
-answers in their DM. Private results stay out of the contractor's
+or administrative action in a group, the agent executes it from that group and
+answers in the owner's DM. The same send operation posts a short "I'll reply privately"
+notice in the source group, unless the owner asks for no group messages. Private results stay out of the contractor's
 conversation and agent history. Human conversation still gets no interruption.
 Public guidance for a contractor goes to their group. The owner can ask for it
 in that group or privately, and the agent sends it to the intended conversation.

@@ -21,6 +21,7 @@ function render() {
 test("a new installation boots with Claude Sonnet 5 and a GPT 6 Sol fallback", async t => {
   await websocketFixture(t);
   const config = render();
+  assert.equal(config.agents.defaults.userTimezone, "America/Sao_Paulo");
   const root = process.env.OPENCLAW_STATE_DIR;
   assert.ok(root);
   const path = join(root, "openclaw.json");

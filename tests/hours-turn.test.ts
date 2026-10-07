@@ -284,7 +284,7 @@ test("natural owner approval is scoped to the current private DM and exact revie
     assert.ok(ownerTool); return ownerTool;
   }
   const ownerTool = tool();
-  assert.match(JSON.stringify(await ownerTool.execute("guide", { action: "guide" })), /Contractor hours/);
+  assert.match(JSON.stringify(await ownerTool.execute("guide", { action: "guide" })), /Ours operations/);
   await assert.rejects(() => ownerTool.execute("arbitrary-file", { action: "guide", path: "/var/lib/plow/openclaw.json" }));
   const approval = { action: "approve_billing", contractor_id: "ana", fingerprint: before.fingerprint };
   await assert.rejects(() => tool(contractor.provider_key).execute("worker-claimed-owner", approval), /verified owner message/);
