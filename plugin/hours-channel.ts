@@ -8,8 +8,8 @@ import { accepts, findOwnerChat, ownerChat, request, type Account, type Chat, ty
 const ownerToolSchema = z.discriminatedUnion("action", [z.object({ action: z.literal("guide") }).strict(), z.object({ action: z.literal("dashboard") }).strict(), z.object({ action: z.literal("find_group"), handle: z.string().trim().min(1) }).strict(), ...managementSchema.options]);
 
 const routingKey = Symbol.for("ours.owner-reply-routing");
-const routingGlobal = globalThis as typeof globalThis & { [routingKey]?: { privateAnswers: Set<string>; notices: Set<string> } };
-const routing = routingGlobal[routingKey] ??= { privateAnswers: new Set<string>(), notices: new Set<string>() };
+const routingGlobal = globalThis as typeof globalThis & { [routingKey]?: { privateAnswers: Set<string>; notices: Set<string>; sentAnswers: Set<string> } };
+const routing = routingGlobal[routingKey] ??= { privateAnswers: new Set<string>(), notices: new Set<string>(), sentAnswers: new Set<string>() };
 const privateOwnerAnswers = routing.privateAnswers;
 const ownerNotices = routing.notices;
 function ownerAnswerKey(source: unknown): string | undefined {
@@ -20,6 +20,14 @@ export function ownerAnswerIsPrivate(source: unknown) {
   const key = ownerAnswerKey(source);
   return key !== undefined && privateOwnerAnswers.has(key);
 }
+export function markOwnerAnswerSent(source: unknown) {
+  const key = ownerAnswerKey(source);
+  if (key !== undefined) routing.sentAnswers.add(key);
+}
+export function ownerAnswerWasSent(source: unknown) {
+  const key = ownerAnswerKey(source);
+  return key !== undefined && routing.sentAnswers.has(key);
+}
 export function claimOwnerNotice(source: unknown) {
   const key = ownerAnswerKey(source);
   if (key === undefined || ownerNotices.has(key)) return false;
@@ -28,7 +36,7 @@ export function claimOwnerNotice(source: unknown) {
 }
 export function clearOwnerAnswer(source: unknown) {
   const key = ownerAnswerKey(source);
-  if (key !== undefined) { privateOwnerAnswers.delete(key); ownerNotices.delete(key); }
+  if (key !== undefined) { privateOwnerAnswers.delete(key); ownerNotices.delete(key); routing.sentAnswers.delete(key); }
 }
 
 function ownerReply(context: OpenClawPluginToolContext, ownerChatUid: string, details: unknown, privateAnswer = true) {

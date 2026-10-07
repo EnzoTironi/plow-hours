@@ -72,7 +72,8 @@ entry=replaceOnce(entry,'        await ownerDmTurn(ownerAccount, context);',`   
         if (privateReply && args.chat_uid !== ownerTurn.chat.uid) throw new Error("Private administration must be answered in the verified owner DM.");
         assertHumanReply(args.text);
         if (privateReply) await sendOwnerNotice(cfg, ownerAccount, source.data, args.source_notice ?? "I'll reply privately.", message => api.logger.info(message));`);
-entry=replaceOnce(entry,'        const details = { message_uid: messageUid };',`        const details = { message_uid: messageUid, request_status: "accepted", delivery_status: "unconfirmed",
+entry=replaceOnce(entry,'        const details = { message_uid: messageUid };',`        if (source.success && (args.chat_uid === source.data.chat_uid || source.data.chat_uid !== ownerTurn.chat.uid)) markOwnerAnswerSent(source.data);
+        const details = { message_uid: messageUid, request_status: "accepted", delivery_status: "unconfirmed",
           note: "Plow accepted the message request. This is not an iMessage delivery or read receipt.",
           reply_instruction: source.success && (args.chat_uid === source.data.chat_uid || source.data.chat_uid !== ownerTurn.chat.uid)
             ? "The actual answer was accepted. Finish with exactly NO_REPLY. Do not repeat the answer in any chat."
@@ -82,7 +83,7 @@ entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(a
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
-entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { claimOwnerNotice, clearOwnerAnswer, ownerAnswerIsPrivate, clockHours, findContractorGroups, contractorGroupContext, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, authorizeHoursOwner, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
+entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { claimOwnerNotice, clearOwnerAnswer, ownerAnswerIsPrivate, ownerAnswerWasSent, markOwnerAnswerSent, clockHours, findContractorGroups, contractorGroupContext, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, authorizeHoursOwner, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
 entry='import { shouldParticipate } from "./hours-attention.ts";\nimport { assertHumanReply, isAttentionDecisionText, isInternalReplyText } from "./hours-reply.ts";\n'+entry;
 entry=replaceOnce(entry,'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {',
   'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {\n  assertHumanReply(text);');
@@ -173,6 +174,11 @@ entry=replaceOnce(entry,'        const sent = await send(account, chat.uid, payl
   '        const target = await phoneReplyTarget();\n        const sent = await send(account, target.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));');
 const preparePayload='      preparePayload: (payload, info) => {';
 entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursEnabled() && account.accountId === "chat") {
+          if (ownerAnswerWasSent(ctxPayload.GatewayRunToolBindings?.plowHoursOwner)) {
+            silent = true;
+            log(\`reply_outcome chat=\${chat.uid} message=\${message.uid} reason=explicit_answer_already_sent\`);
+            return null;
+          }
           if (payload.isError) {
             blockedModelReply = true;
             failure = new Error("Agent reply failed");

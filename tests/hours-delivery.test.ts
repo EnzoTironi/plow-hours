@@ -5,7 +5,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import entry from "./ours-entry.ts";
 import { hoursLedger } from "../plugin/hours.ts";
-import { clearOwnerAnswer, ownerAnswerIsPrivate, findContractorGroups, ownerPrivateConversation } from "../plugin/hours-channel.ts";
+import { clearOwnerAnswer, ownerAnswerIsPrivate, ownerAnswerWasSent, findContractorGroups, ownerPrivateConversation } from "../plugin/hours-channel.ts";
 import { DeliveryUnknownError, HttpError } from "../plugin/transport.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
@@ -254,15 +254,21 @@ test("an explicit answer sent to its own source DM instructs the model not to du
     if (url.endsWith(home.uid)) return Response.json(home);
     assert.fail("Unexpected provider request: " + url);
   });
-  const tool = ownerTools(true, { toolBindings: { plowHoursOwner: {
+  const source = {
     line_uid: "line", chat_uid: home.uid, handle: owner.provider_key,
     message_uid: "owner-delivery-question", created_at: "2026-10-05T21:00:00Z",
     body: "Where is the group?",
-  } } })("plow_reply_to");
+  };
+  t.after(() => clearOwnerAnswer(source));
+  const tool = ownerTools(true, { toolBindings: { plowHoursOwner: source } })("plow_reply_to");
   const receipt = z.object({ details: z.object({ reply_instruction: z.string() }) })
     .parse(await tool.execute("answer", { chat_uid: home.uid, text: "Group delivery is not confirmed." }));
   assert.equal(posts.length, 1);
   assert.match(receipt.details.reply_instruction, /exactly NO_REPLY/);
+  assert.equal(ownerAnswerWasSent(source), true);
+  assert.equal(ownerAnswerWasSent({ ...source, message_uid: "the-next-question" }), false);
+  clearOwnerAnswer(source);
+  assert.equal(ownerAnswerWasSent(source), false);
 });
 
 test("explicit follow-ups and group introductions reject internal protocol before any provider POST", async t => {
