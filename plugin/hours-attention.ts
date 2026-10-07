@@ -11,6 +11,7 @@ Return participate=true only for:
 - the worker submitting their own actual start, pause, finish, work update or payment/document information;
 - an answer to the agent's question or a direct call of its name.
 A question or instruction addressed to another participant is theirs to answer, even about hours. Return false.
+Mentioning a person as the subject or recipient is different from addressing them. An owner asking you to explain hours to a worker is asking the agent: "Can you explain to Ana how she can record work here?", "Consegue explicar pra ela como vc funciona ours?" and "Send me the dashboard" are true, without requiring a bot name. "Ana, can you log your hours?" is addressed to Ana and is false.
 Greetings, thanks, acknowledgements, bare links, screenshots, human conversation, infrastructure and bug discussions are false without a new request for the hours agent.
 Access problems do not make unrelated conversation a request. Decide only whether to participate, never perform an action or discuss your decision.`;
 
@@ -28,7 +29,9 @@ export async function shouldParticipate(cfg: OpenClawConfig, account: Account, c
     model: model.replace(/^plow\//, ""), stream: false, max_tokens: 80,
     response_format: { type: "json_schema", json_schema: { name: "ours_attention", strict: true, schema: z.toJSONSchema(decision) } },
     messages: [{ role: "system", content: policy }, { role: "user", content: JSON.stringify({
-      agent_names: ["Ours", cfg.agents?.entries?.main?.identity?.name].filter(Boolean),
+      agent_names: ["Ours", cfg.agents?.entries?.main?.identity?.name,
+        ...chat.participants.flatMap(p => p.type === "agent" && p.relationship === "self" ? [p.line.display_name] : []),
+      ].filter(Boolean),
       participants: chat.participants.map(person), recent: recent.slice(-6).map(reply), current: reply(message),
     }) }],
   }, AbortSignal.any([signal, AbortSignal.timeout(30_000)]));

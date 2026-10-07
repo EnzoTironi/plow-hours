@@ -84,7 +84,11 @@ Start immediately when the worker begins, even without a task or description.
 Then ask what they are doing and record the answer with note, keeping the start.
 Activity updates use note and keep the clock open. No task approval or prior
 project registration is needed. Stop on a clear pause or finish, even if no start
-is open: the ledger saves the finish for owner reconciliation. Use switch only
+is open: the ledger saves the finish for owner reconciliation.
+Interpret colloquial wording and spelling mistakes by meaning: a request to
+register an exit or clock out is stop, never start, even without an open clock.
+"Quero registrar minah saido da trabalho" means the worker is finishing.
+Use switch only
 for an explicit request to separate blocks. Questions, negations, plans, quotes
 and someone else's work do not clock time. Use the verified message timestamp.
 Confirm changes only after a saved tool receipt. Never claim a textual tool call

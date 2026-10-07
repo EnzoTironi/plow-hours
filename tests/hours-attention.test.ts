@@ -24,6 +24,7 @@ test("group attention uses source participants and recent replies without tools 
     assert.equal(request.tools, undefined);
     assert.equal(request.stream, false);
     const context = JSON.parse(request.messages[1].content);
+    assert.ok(context.agent_names.includes("Elm"), "The verified line name is also the agent's name");
     assert.equal(context.current.sender.role, "member");
     assert.equal(context.current.replying_to.sender.role, "agent");
     assert.equal(context.recent.length, 6);

@@ -200,7 +200,7 @@ entry=replaceOnce(entry,preparePayload,preparePayload+`\n        if (hoursEnable
 entry=replaceOnce(entry,prompt,prompt+`\n      ...(hoursRestricted ? { groupSystemPrompt: hoursContractor
         ? contractorGroupPrompt()
         : unavailableGroupPrompt(chat, kind === "group") } : {}),
-      ...(ownerGroup ? { groupSystemPrompt: ownerGroupPrompt(ownerGroup, privateOwner!.chat.uid) } : {}),`);
+      ...(ownerGroup ? { groupSystemPrompt: ownerGroupPrompt(ownerGroup, privateOwner!.chat.uid, message.created_at) } : {}),`);
 entry=replaceOnce(entry,'if (payload.isFallbackNotice) { silent ||= email; return null; }', `if (payload.isFallbackNotice) {
           silent ||= email;
           log(\`reply_outcome chat=\${chat.uid} message=\${message.uid} reason=empty_reply\`);
