@@ -220,6 +220,28 @@ test("durable follow-ups report acceptance only, and malformed message responses
   assert.equal(posts, 2, "An uncertain response is not retried");
 });
 
+test("an explicit answer sent to its own source DM instructs the model not to duplicate it", async t => {
+  await websocketFixture(t);
+  const posts: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    if (url.endsWith(`/chats/${home.uid}/messages`)) {
+      assert.equal(init.method, "POST"); posts.push(String(init.body));
+      return Response.json({ uid: "msg_answer" });
+    }
+    if (url.endsWith(home.uid)) return Response.json(home);
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const tool = ownerTools(true, { toolBindings: { plowHoursOwner: {
+    line_uid: "line", chat_uid: home.uid, handle: owner.provider_key,
+    message_uid: "owner-delivery-question", created_at: "2026-10-05T21:00:00Z",
+    body: "Where is the group?",
+  } } })("plow_reply_to");
+  const receipt = z.object({ details: z.object({ reply_instruction: z.string() }) })
+    .parse(await tool.execute("answer", { chat_uid: home.uid, text: "Group delivery is not confirmed." }));
+  assert.equal(posts.length, 1);
+  assert.match(receipt.details.reply_instruction, /exactly NO_REPLY/);
+});
+
 test("explicit follow-ups and group introductions reject internal protocol before any provider POST", async t => {
   await websocketFixture(t);
   const posts: string[] = [];

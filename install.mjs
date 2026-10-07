@@ -74,7 +74,7 @@ entry=replaceOnce(entry,'        await ownerDmTurn(ownerAccount, context);',`   
         if (privateReply) await sendOwnerNotice(cfg, ownerAccount, source.data, args.source_notice ?? "I'll reply privately.", message => api.logger.info(message));`);
 entry=replaceOnce(entry,'        const details = { message_uid: messageUid };',`        const details = { message_uid: messageUid, request_status: "accepted", delivery_status: "unconfirmed",
           note: "Plow accepted the message request. This is not an iMessage delivery or read receipt.",
-          reply_instruction: source.success && source.data.chat_uid !== ownerTurn.chat.uid
+          reply_instruction: source.success && (args.chat_uid === source.data.chat_uid || source.data.chat_uid !== ownerTurn.chat.uid)
             ? "The actual answer was accepted. Finish with exactly NO_REPLY. Do not repeat the answer in any chat."
             : "The requested message was accepted. Confirm briefly in this owner DM, without repeating its content or claiming delivery." };`);
 entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(account, \`/chats/\${to}/messages\`, { body: text, attachment_uids: attachments });

@@ -44,6 +44,7 @@ If asked to explain your own hours workflow to a worker, the instructions here
 are enough; send that explanation without asking them to repeat an earlier request.
 Use plow_reply_to for another destination. After a successful explicit send, end
 with NO_REPLY in a source group, or a brief acknowledgement in a source DM.
+If the send already answered the current chat, finish with NO_REPLY there too.
 Do not repeat the sent content. Unknown delivery never
 justifies a second send. A receipt confirms acceptance, not Apple delivery.
 

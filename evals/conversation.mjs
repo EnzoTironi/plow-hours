@@ -158,7 +158,6 @@ const server = createServer(async (req, res) => {
           if (event.type === 'response.output_text.delta') { text += event.delta; if (request.stream) chunk({ content: event.delta }); }
           if (event.type === 'response.output_item.done' && event.item.type === 'function_call') {
             const call = event.item;
-            toolCalls.set(call.call_id, { id: call.call_id, name: call.name, args: JSON.parse(call.arguments) });
             if (request.stream) chunk({ tool_calls: [{ index: calls++, id: call.call_id, type: 'function',
               function: { name: call.name, arguments: call.arguments } }] });
           }
@@ -847,12 +846,14 @@ try {
     const missing = await say(owner, home.uid, "Where is the group? I can't see it in iMessage.");
     check('A missing group is acknowledged without another send or a claim it appeared on the device', () => {
       assert.equal(groupRequests.length, 2); unconfirmed(missing); noFallback(missing);
-      assert.ok(!missing.tool_calls.some(c => ['plow_start_thread', 'plow_reply_to', 'message'].includes(c.name)));
+      assert.equal(missing.responses.length, 1, 'Answer once without resending to the worker');
+      assert.ok(!missing.tool_calls.some(c => c.name === 'plow_start_thread' || (['plow_reply_to', 'message'].includes(c.name) && c.args.chat_uid !== home.uid)));
     });
     const certain = await say(owner, home.uid, "I'm sure that email has iMessage. Don't send again yet. Can you actually check whether Alex received it?");
     check('Availability and receipt remain unknown when the provider exposes no check', () => {
       assert.equal(groupRequests.length, 2); unconfirmed(certain); noFallback(certain);
-      assert.ok(!certain.tool_calls.some(c => ['plow_start_thread', 'plow_reply_to', 'message'].includes(c.name)));
+      assert.equal(certain.responses.length, 1);
+      assert.ok(!certain.tool_calls.some(c => c.name === 'plow_start_thread' || (['plow_reply_to', 'message'].includes(c.name) && c.args.chat_uid !== home.uid)));
     });
     const corrected = await say(owner, home.uid, 'I found the correct iMessage contact: ours-qa-alex@icloud.com. Create the group using this email and fix the earlier registration. Keep the same work and rate. Tell me whether delivery to Alex is confirmed.');
     check('Corrected contact creates the exact requested group and deactivates the incorrect binding', () => {
