@@ -92,9 +92,9 @@ separate.
 
 Contractors use the agent through their registered group. Administration happens
 in the owner's private conversation. If the owner asks for a report, dashboard
-or administrative action in a group, the agent handles it in their private
-session, posts a short "I'll reply privately" notice in that source group, and
-answers in their DM. Private results stay out of the contractor's
+or administrative action in a group, the agent executes it from that group and
+answers in the owner's DM. The same send operation posts a short "I'll reply privately"
+notice in the source group, unless the owner asks for no group messages. Private results stay out of the contractor's
 conversation and agent history. Human conversation still gets no interruption.
 Public guidance for a contractor goes to their group. The owner can ask for it
 in that group or privately, and the agent sends it to the intended conversation.
@@ -344,6 +344,34 @@ using a controlled local model fixture, without external model usage.
 `-e EVAL_PHASE=semantic_payment` tests owner requests without mentions, quiet human
 conversation, direct Pix and ACH registration before billing, private owner
 retrieval, contractor isolation and clocks through the real model and tools.
+Run the complete regression suite against one immutable local image:
+
+```sh
+export PLOW_AGENT_TOKEN="$(cat ~/.config/plow/token)"
+python3 evals/run-suite.py --image plow-hours:test --output ../ours-e2e
+```
+
+To test locally with your Codex subscription and Luna instead of the Plow model
+API, pass your local authentication file. The runner mounts it read-only in
+disposable containers; it never copies it into the image or repository.
+
+```sh
+python3 evals/run-suite.py --image plow-hours:test \
+  --codex-auth "$HOME/.codex/auth.json" --output ../ours-luna-e2e
+```
+
+This uses `gpt-6-luna` for real responses and group attention decisions. Recovery
+and malformed-response cases use explicitly labeled controlled completions.
+Results describe the tested model; they do not establish another model's behavior.
+
+The runner limits execution to two isolated conversations at a time and records
+checks, conversation logs and the image ID. Test state lives in a disposable
+memory filesystem; transcripts and ledger snapshots are saved in the output
+directory. Use `--jobs 1` when other agents are running locally.
+Use `--phases public_routing open_correction`
+for a focused run. Public routing covers the original group, a rapid follow-up,
+private dashboard delivery and an owner correction that leaves the clock open.
+
 These evaluations send no production messages. Live Apple iMessage delivery,
 hosted deployment and the chosen off-host backup destination need separate checks.
 

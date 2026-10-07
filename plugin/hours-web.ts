@@ -64,13 +64,13 @@ function writeHoursData(res: ServerResponse, getLedger: () => HoursLedger, url: 
 
 export function createHoursWebHandler(getLedger: () => HoursLedger) {
   const assets = new Map([
-    ["/hours", { type: "text/html; charset=utf-8", body: readFileSync(new URL("./hours-web/index.html", import.meta.url)) }],
-    ["/hours/app.js", { type: "text/javascript; charset=utf-8", body: readFileSync(new URL("./hours-web/app.js", import.meta.url)) }],
-    ["/hours/style.css", { type: "text/css; charset=utf-8", body: readFileSync(new URL("./hours-web/style.css", import.meta.url)) }],
-    ["/hours/ours-logo.svg", { type: "image/svg+xml", body: readFileSync(new URL("./hours-web/ours-logo.svg", import.meta.url)) }],
-    ["/hours/fonts/dm-sans-latin.woff2", { type: "font/woff2", body: readFileSync(new URL("./hours-web/fonts/dm-sans-latin.woff2", import.meta.url)) }],
-    ["/hours/fonts/dm-mono-400-latin.woff2", { type: "font/woff2", body: readFileSync(new URL("./hours-web/fonts/dm-mono-400-latin.woff2", import.meta.url)) }],
-    ["/hours/fonts/epilogue-latin-500-normal.woff2", { type: "font/woff2", body: readFileSync(new URL("./hours-web/fonts/epilogue-latin-500-normal.woff2", import.meta.url)) }],
+    ["/hours", { type: "text/html; charset=utf-8", body: readFileSync("/opt/plow/hours-source/plugin/hours-web/index.html") }],
+    ["/hours/app.js", { type: "text/javascript; charset=utf-8", body: readFileSync("/opt/plow/hours-source/plugin/hours-web/app.js") }],
+    ["/hours/style.css", { type: "text/css; charset=utf-8", body: readFileSync("/opt/plow/hours-source/plugin/hours-web/style.css") }],
+    ["/hours/ours-logo.svg", { type: "image/svg+xml", body: readFileSync("/opt/plow/hours-source/plugin/hours-web/ours-logo.svg") }],
+    ["/hours/fonts/dm-sans-latin.woff2", { type: "font/woff2", body: readFileSync("/opt/plow/hours-source/plugin/hours-web/fonts/dm-sans-latin.woff2") }],
+    ["/hours/fonts/dm-mono-400-latin.woff2", { type: "font/woff2", body: readFileSync("/opt/plow/hours-source/plugin/hours-web/fonts/dm-mono-400-latin.woff2") }],
+    ["/hours/fonts/epilogue-latin-500-normal.woff2", { type: "font/woff2", body: readFileSync("/opt/plow/hours-source/plugin/hours-web/fonts/epilogue-latin-500-normal.woff2") }],
   ]);
   return (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader("Cache-Control", "private, no-store");

@@ -3,9 +3,9 @@ import { test } from "node:test";
 import { z } from "zod";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
-import entry from "../plugin/index.ts";
+import entry from "./ours-entry.ts";
 import { hoursLedger } from "../plugin/hours.ts";
-import { findContractorGroups, ownerPrivateConversation } from "../plugin/hours-channel.ts";
+import { clearOwnerAnswer, ownerAnswerIsPrivate, ownerAnswerWasSent, findContractorGroups, ownerPrivateConversation } from "../plugin/hours-channel.ts";
 import { DeliveryUnknownError, HttpError } from "../plugin/transport.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
@@ -41,7 +41,7 @@ test("private routing binds the actual group owner to their live DM, rejecting w
   await assert.rejects(() => ownerPrivateConversation(account, group, message), /owner/);
 });
 
-test("an owner group turn keeps the original people and conversation facts while tools and delivery stay private", async t => {
+test("an owner group turn keeps its native source and reply destination in the group", async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const source = { ...group, display_name: "Enzo, Pueblo and Alder", participants: [
     { ...owner, uid: "owner-in-group", display_name: "Enzo" }, { ...worker, display_name: "Pueblo" }, self,
@@ -51,6 +51,7 @@ test("an owner group turn keeps the original people and conversation facts while
     chat_uid: source.uid, timezone: "America/Sao_Paulo", rate_cents: 2000 }, "register-pueblo");
   t.mock.method(globalThis, "fetch", async (url: string) => {
     const path = new URL(url).pathname;
+    if (path === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: JSON.stringify({ participate: true }) } }] });
     if (path.endsWith("/ws/ticket")) return Response.json({ ticket: "fixture" });
     if (path === "/v1/chats") return Response.json({ data: [destination, source], has_more: false });
     if (path.endsWith("/messages")) return Response.json({ data: [], has_more: false });
@@ -65,7 +66,7 @@ test("an owner group turn keeps the original people and conversation facts while
   });
   const contextSchema = z.object({
     from: z.string(), route: z.object({ sessionKey: z.string() }),
-    conversation: z.object({ kind: z.string(), id: z.string(), nativeChannelId: z.string(), label: z.string() }),
+    conversation: z.object({ kind: z.string(), id: z.string(), nativeChannelId: z.string(), label: z.string(), routePeer: z.object({ kind: z.string(), id: z.string() }) }),
     reply: z.object({ to: z.string(), nativeChannelId: z.string() }),
     message: z.object({ rawBody: z.string() }),
     supplemental: z.object({ channelStructuredContext: z.array(z.object({ payload: z.object({
@@ -82,7 +83,8 @@ test("an owner group turn keeps the original people and conversation facts while
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: { routing: { resolveAgentRoute }, session: { resolveStorePath, updateLastRoute }, inbound: {
       buildContext(raw: unknown) { seen = contextSchema.parse(raw); return { SessionKey: seen.route.sessionKey }; },
-      async dispatch({ replyOptions }: { replyOptions: { turnAdoptionLifecycle: { onAdopted(): Promise<void> } } }) {
+      async dispatch({ replyOptions, delivery }: { delivery: { durable(): Promise<{ to: string }> }, replyOptions: { turnAdoptionLifecycle: { onAdopted(): Promise<void> } } }) {
+        assert.equal((await delivery.durable()).to, source.uid);
         await replyOptions.turnAdoptionLifecycle.onAdopted();
         return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
       },
@@ -100,12 +102,13 @@ test("an owner group turn keeps the original people and conversation facts while
   assert.equal(seen.conversation.kind, "group"); assert.equal(seen.conversation.id, source.uid);
   assert.equal(seen.conversation.label, source.display_name);
   assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.message_origin, { kind: "group", chat_uid: source.uid });
-  assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.final_reply_destination, { kind: "direct", chat_uid: destination.uid });
+  assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.final_reply_destination, { kind: "group", chat_uid: source.uid });
   assert.equal(seen.message.rawBody, "Alder, pode pedir para o Pueblo registrar o trabalho a partir de agora por aqui?");
   assert.deepEqual(seen.supplemental.channelStructuredContext[0]?.payload.participants.map(p => p.name), ["Enzo", "Pueblo", "Alder"]);
   assert.equal(seen.route.sessionKey, `agent:main:plow:owner-group:${source.uid}`);
-  assert.equal(seen.conversation.nativeChannelId, destination.uid);
-  assert.equal(seen.reply.to, `plow:${destination.uid}`); assert.equal(seen.reply.nativeChannelId, destination.uid);
+  assert.equal(seen.conversation.nativeChannelId, source.uid);
+  assert.deepEqual(seen.conversation.routePeer, { kind: "group", id: source.uid });
+  assert.equal(seen.reply.to, `plow:${source.uid}`); assert.equal(seen.reply.nativeChannelId, source.uid);
 });
 
 function ownerTools(senderIsOwner = true, overrides: object = {}) {
@@ -151,8 +154,32 @@ test("accepted group requests and saved rosters do not claim iMessage availabili
   await assert.rejects(() => ownerTools(false)("plow_start_thread").execute("member", introduction), /owner's main Plow DM/);
   const registered = z.object({ details: z.object({ registered: z.literal(true), roster_verified: z.literal(true), verification_scope: z.string() }).passthrough() })
     .parse(await tool("plow_hours").execute("register", { action: "contractor", id: "alex", name: "Alex", handle: worker.provider_key, chat_uid: group.uid, timezone: "America/New_York", rate_cents: 2000 }));
+  assert.equal(registered.details.timezone_label, "New York");
   assert.ok(!("thread_verified" in registered.details));
   assert.match(registered.details.verification_scope, /delivery have not been checked/);
+});
+
+test("registration exposes an earlier same-name profile as facts without deactivating it", async t => {
+  await websocketFixture(t);
+  hoursLedger().manage({ action: "contractor", id: "old-alex", name: "Alex", handle: "wrong@example.test", chat_uid: "cht_old", timezone: "America/New_York", rate_cents: 2000 }, "old-contact");
+  hoursLedger().manage({ action: "demand", id: "landing", contractor_id: "old-alex", project: "Website", summary: "Landing page" }, "old-work");
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith(home.uid)) return Response.json(home);
+    if (url.endsWith(group.uid)) return Response.json(group);
+    if (url.endsWith("/agents/me")) return Response.json({ agent: { web_url: "https://hours.example.test" } });
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const receipt = z.object({ details: z.object({ other_active_registrations: z.array(z.object({
+    contractor: z.object({ id: z.string(), active: z.number() }),
+    demands: z.array(z.object({ summary: z.string() })),
+  })) }) }).parse(await ownerTools()("plow_hours").execute("corrected-contact", {
+    action: "contractor", id: "new-alex", name: "Alex", handle: worker.provider_key,
+    chat_uid: group.uid, timezone: "America/New_York", rate_cents: 2000,
+  }));
+  assert.equal(receipt.details.other_active_registrations.length, 1);
+  assert.equal(receipt.details.other_active_registrations[0].contractor.id, "old-alex");
+  assert.equal(receipt.details.other_active_registrations[0].demands[0].summary, "Landing page");
+  assert.equal(hoursLedger().report("old-alex")[0].contractor.active, 1);
 });
 
 test("rejections, transport failures and malformed accepted responses produce no success receipt or automatic retry", async t => {
@@ -214,6 +241,34 @@ test("durable follow-ups report acceptance only, and malformed message responses
   malformed = true;
   await assert.rejects(() => tool.execute("malformed-followup", { chat_uid: group.uid, text: "Another requested message." }), DeliveryUnknownError);
   assert.equal(posts, 2, "An uncertain response is not retried");
+});
+
+test("an explicit answer sent to its own source DM instructs the model not to duplicate it", async t => {
+  await websocketFixture(t);
+  const posts: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    if (url.endsWith(`/chats/${home.uid}/messages`)) {
+      assert.equal(init.method, "POST"); posts.push(String(init.body));
+      return Response.json({ uid: "msg_answer" });
+    }
+    if (url.endsWith(home.uid)) return Response.json(home);
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const source = {
+    line_uid: "line", chat_uid: home.uid, handle: owner.provider_key,
+    message_uid: "owner-delivery-question", created_at: "2026-10-05T21:00:00Z",
+    body: "Where is the group?",
+  };
+  t.after(() => clearOwnerAnswer(source));
+  const tool = ownerTools(true, { toolBindings: { plowHoursOwner: source } })("plow_reply_to");
+  const receipt = z.object({ details: z.object({ reply_instruction: z.string() }) })
+    .parse(await tool.execute("answer", { chat_uid: home.uid, text: "Group delivery is not confirmed." }));
+  assert.equal(posts.length, 1);
+  assert.match(receipt.details.reply_instruction, /exactly NO_REPLY/);
+  assert.equal(ownerAnswerWasSent(source), true);
+  assert.equal(ownerAnswerWasSent({ ...source, message_uid: "the-next-question" }), false);
+  clearOwnerAnswer(source);
+  assert.equal(ownerAnswerWasSent(source), false);
 });
 
 test("explicit follow-ups and group introductions reject internal protocol before any provider POST", async t => {
@@ -307,12 +362,24 @@ test("isolated owner group sessions retain authorization only with the bound sou
     if (url.endsWith("/agents/me")) return Response.json({ line: { uid: "line" }, agent: { web_url: "https://hours.example.test" } });
     assert.fail("Unexpected provider request: " + url);
   });
-  const context = { sessionKey: "agent:main:plow:owner-group:" + group.uid,
+  const context = { sessionKey: "agent:main:plow:owner-group:" + group.uid, nativeChannelId: group.uid,
     toolBindings: { plowHoursOwner: { line_uid: "line", chat_uid: group.uid, handle: owner.provider_key,
       message_uid: "owner-dashboard", created_at: "2026-10-06T12:00:00Z", body: "Send my dashboard" } } };
   const tools = ownerTools(true, context);
   const receipt = await tools("plow_hours").execute("dashboard", { action: "dashboard" });
   assert.ok(receipt);
+  assert.equal(ownerAnswerIsPrivate(context.toolBindings.plowHoursOwner), true);
+  const separatelyLoaded = await import("../plugin/hours-channel.ts?separate-plugin-loader");
+  assert.equal(separatelyLoaded.ownerAnswerIsPrivate(context.toolBindings.plowHoursOwner), true, "Tool and channel loaders share the per-message routing decision");
+  assert.equal(separatelyLoaded.claimOwnerNotice(context.toolBindings.plowHoursOwner), true);
+  assert.equal(separatelyLoaded.claimOwnerNotice(context.toolBindings.plowHoursOwner), false);
+  assert.equal(ownerAnswerIsPrivate({ ...context.toolBindings.plowHoursOwner, message_uid: "different-request" }), false);
+  clearOwnerAnswer(context.toolBindings.plowHoursOwner);
+  assert.equal(ownerAnswerIsPrivate(context.toolBindings.plowHoursOwner), false);
+  assert.match(JSON.stringify(receipt), /reply_routing/);
+  assert.match(JSON.stringify(receipt), /private_answer/);
+  await assert.rejects(() => ownerTools(true, { ...context, nativeChannelId: home.uid })("plow_hours").execute("wrong-source", { action: "dashboard" }), /group source changed/);
+  await assert.rejects(() => tools("plow_hours").execute("group-approval", { action: "approve_billing", contractor_id: "ana", fingerprint: "a".repeat(64) }), /verified owner message in the private DM/);
   await assert.rejects(() => ownerTools(true, { ...context, toolBindings: {} })("plow_hours").execute("missing-source", { action: "dashboard" }), /owner's main Plow DM/);
   await assert.rejects(() => ownerTools(true, { ...context, sessionKey: "agent:main:plow:owner-group:another" })("plow_hours").execute("wrong-group", { action: "dashboard" }), /owner's main Plow DM/);
   current = { ...group, participants: [self, worker, { ...owner, role: "member" }] };
@@ -333,8 +400,32 @@ test("existing contractor group is discovered and reused without creation or int
   const tools = ownerTools();
   const found = z.object({ details: z.object({ status: z.literal("found"), groups: z.array(z.object({ chat_uid: z.literal(group.uid) })) }) }).parse(await tools("plow_hours").execute("find", { action: "find_group", handle: worker.provider_key.toUpperCase() }));
   assert.equal(found.details.groups.length, 1);
+  hoursLedger().manage({ action: "contractor", id: "alex", name: "Alex", handle: worker.provider_key,
+    chat_uid: group.uid, timezone: "America/Sao_Paulo", rate_cents: 2000 }, "register-alex");
+  const named = z.object({ details: z.object({ status: z.literal("found"), groups: z.array(z.object({ chat_uid: z.literal(group.uid), contractor_id: z.literal("alex") })) }) })
+    .parse(await tools("plow_hours").execute("find-name", { action: "find_group", handle: "aLeX" }));
+  assert.equal(named.details.groups.length, 1);
   const reused = z.object({ details: z.object({ chat_uid: z.literal(group.uid), reused: z.literal(true), introduction_sent: z.literal(false), request_status: z.literal("existing") }) }).parse(await tools("plow_start_thread").execute("reuse", introduction));
   assert.ok(reused); assert.equal(posts, 0);
+});
+
+test("a saved contractor name resolves only verified groups and duplicate names stay ambiguous", async t => {
+  await websocketFixture(t);
+  const other = { ...group, uid: "cht_other_alex", participants: [owner, { ...worker, uid: "other-worker", provider_key: "other@example.test" }, self] };
+  for (const [id, chat] of [["alex", group], ["other", other]] as const) {
+    const member = chat.participants.find(p => p.type === "member" && p.role !== "owner");
+    assert.ok(member?.type === "member");
+    hoursLedger().manage({ action: "contractor", id, name: "Alex", handle: member.provider_key,
+      chat_uid: chat.uid, timezone: "America/Sao_Paulo", rate_cents: 2000 }, "register-" + id);
+  }
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith("/v1/chats")) return Response.json({ data: [home, group, other], has_more: false });
+    if (url.endsWith(group.uid)) return Response.json(group);
+    if (url.endsWith(other.uid)) return Response.json(other);
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const found = await findContractorGroups({ apiBase: "http://fixture", accountId: "chat", lineUid: "line" }, home, "Alex");
+  assert.equal(found.status, "ambiguous"); assert.equal(found.groups.length, 2);
 });
 
 test("a creation conflict triggers a fresh lookup and reuses a newly visible group without retrying POST", async t => {
@@ -425,4 +516,60 @@ test("incomplete or unavailable discovery never claims no existing group or star
   await assert.rejects(() => tool.execute("truncated", introduction), /incomplete/);
   unavailable = true;
   await assert.rejects(() => tool.execute("unavailable", introduction), (error: unknown) => error instanceof HttpError && error.status === 503);
+});
+
+
+test("one private answer delivers its source notice once, without making delivery depend on the notice", async t => {
+  await websocketFixture(t);
+  const posts: { chat: string; body: string }[] = [];
+  let uncertainNotice = false;
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    if (init.method === "POST") {
+      const chat = url.includes(`/chats/${home.uid}/`) ? home.uid : group.uid;
+      posts.push({ chat, body: JSON.parse(String(init.body)).body });
+      return Response.json(chat === group.uid && uncertainNotice ? {} : { uid: `sent_${posts.length}` });
+    }
+    if (url.endsWith(home.uid)) return Response.json(home);
+    if (url.endsWith(group.uid)) return Response.json(group);
+    if (url.endsWith("/v1/chats")) return Response.json({ data: [home, group], has_more: false });
+    if (url.endsWith("/agents/me")) return Response.json({ line: { uid: "line" }, agent: { web_url: "https://hours.example.test" } });
+    assert.fail("Unexpected request " + url);
+  });
+  for (const mode of ["normal", "suppressed", "uncertain"] as const) {
+    uncertainNotice = mode === "uncertain";
+    const source = { line_uid: "line", chat_uid: group.uid, handle: owner.provider_key,
+      message_uid: mode, created_at: "2026-10-06T12:00:00Z", body: "Send my dashboard" };
+    const tools = ownerTools(true, { sessionKey: "agent:main:plow:owner-group:" + group.uid,
+      nativeChannelId: group.uid, toolBindings: { plowHoursOwner: source } });
+    await tools("plow_hours").execute("dashboard-" + mode, { action: "dashboard" });
+    const before = posts.length;
+    await assert.rejects(() => tools("plow_reply_to").execute("notice-only", { chat_uid: group.uid, text: "I'll reply privately." }), /actual answer/);
+    await assert.rejects(() => tools("plow_reply_to").execute("unsafe-notice", { chat_uid: home.uid, text: "Your dashboard.", source_notice: "USD 500" }), /without private data/);
+    assert.equal(posts.length, before);
+    const source_notice = mode === "suppressed" ? "" : "Vou te responder no privado.";
+    await tools("plow_reply_to").execute("answer-" + mode, { chat_uid: home.uid, text: "Your dashboard: https://hours.example.test/hours", source_notice });
+    assert.deepEqual(posts.slice(before), [
+      ...(mode === "suppressed" ? [] : [{ chat: group.uid, body: source_notice }]),
+      { chat: home.uid, body: "Your dashboard: https://hours.example.test/hours" },
+    ]);
+    await tools("plow_reply_to").execute("followup-" + mode, { chat_uid: home.uid, text: "Another requested detail.", source_notice });
+    assert.equal(posts.slice(before).filter(p => p.chat === group.uid).length, mode === "suppressed" ? 0 : 1);
+    clearOwnerAnswer(source);
+  }
+});
+
+test("owner model cannot acknowledge external publication without a writing integration", async t => {
+  await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith(home.uid)) return Response.json(home);
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const before = hoursLedger().report();
+  await assert.rejects(() => ownerTools()("plow_hours").execute("invented-publication", {
+    action: "projected", contractor_id: "alex", target: "wiki", revision: 1,
+  }));
+  assert.deepEqual(hoursLedger().report(), before);
 });

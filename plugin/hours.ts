@@ -86,11 +86,13 @@ export function clockTime(ms: number, timezone: string, language: Language) {
   return new Intl.DateTimeFormat(language === "pt" ? "pt-BR" : "en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit",
     ...(saoPaulo ? {} : { timeZoneName: "short" as const }), ...(day(ms) === day(Date.now()) ? {} : { month: "short", day: "numeric" }) }).format(ms) + label;
 }
-/** A receipt duration: "5 min", "1 h 20 min". The ledger keeps the exact interval. */
+/** Human duration without rounding partial minutes into extra recorded work. */
 export function duration(ms: number) {
-  const minutes = Math.max(ms > 0 ? 1 : 0, Math.round(ms / 60_000)), h = Math.floor(minutes / 60), m = minutes % 60;
-  return h ? `${h} h${m ? ` ${m} min` : ""}` : `${m} min`;
+  const seconds = Math.floor(Math.max(0, ms) / 1000);
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds / 60) % 60, s = seconds % 60;
+  return [h ? `${h} h` : "", m ? `${m} min` : "", s ? `${s} s` : ""].filter(Boolean).join(" ") || (ms > 0 ? "<1 s" : "0 min");
 }
+const usd = (cents: number) => `USD ${(cents / 100).toFixed(2)}`;
 /** Every clock receipt a contractor reads, in the language they were registered with. Shortcut commands send these
  * without a model turn, so they must already be in the contractor's language. Owner notices keep their own copy. */
 const RECEIPTS = {
@@ -105,7 +107,7 @@ const RECEIPTS = {
     pendingCancelled: "Início pendente cancelado. Nenhuma hora foi registrada.",
     clarifyStart: (at: string) => `Recebi seu início às ${at}. Qual demanda você está fazendo? Vou manter esse horário quando você confirmar.`,
     noPendingStart: "Não há um início pendente desta conversa para confirmar. Me diga quando começar uma demanda.",
-    started: (at: string, work: string) => `Ponto iniciado às ${at}.${work ? ` Trabalho: ${work}.` : ""}`,
+    started: (at: string, work: string) => `Ponto iniciado às ${at}.${work ? ` Trabalho: ${work}.` : " O que você está fazendo?"}`,
     recoveredStop: (stop: string) => ` O encerramento que chegou antes também foi recuperado: ${stop}`,
     stopped: (at: string, total: string, long: boolean) => `Ponto encerrado às ${at}. Total: ${total}.${long ? " Esse bloco passou de 12 horas e precisa da revisão do dono antes do fechamento." : ""}`,
     statusOpen: (at: string, work: string) => `Ponto aberto desde ${at}.${work ? ` Trabalho: ${work}` : ""}`,
@@ -132,7 +134,7 @@ const RECEIPTS = {
     pendingCancelled: "Pending start cancelled. No hours were recorded.",
     clarifyStart: (at: string) => `Got your start at ${at}. What are you working on? I'll keep that start time when you confirm.`,
     noPendingStart: "There's no pending start in this conversation to confirm. Tell me when you start working.",
-    started: (at: string, work: string) => `Clock started at ${at}.${work ? ` Work: ${work}.` : ""}`,
+    started: (at: string, work: string) => `Clock started at ${at}.${work ? ` Work: ${work}.` : " What are you working on?"}`,
     recoveredStop: (stop: string) => ` The stop that arrived earlier was recovered too: ${stop}`,
     stopped: (at: string, total: string, long: boolean) => `Clock stopped at ${at}. Total: ${total}.${long ? " This block is over 12 hours and needs the owner's review before it closes." : ""}`,
     statusOpen: (at: string, work: string) => `Clock running since ${at}.${work ? ` Work: ${work}` : ""}`,
@@ -222,6 +224,11 @@ export class HoursLedger {
         this.db.exec("ALTER TABLE owner_notices ADD COLUMN body TEXT NOT NULL DEFAULT ''");
       this.db.exec("DROP INDEX IF EXISTS one_open_entry; CREATE UNIQUE INDEX one_open_entry ON entries(contractor_id) WHERE end_ms IS NULL AND voided=0;");
       this.db.exec("UPDATE clock_inbox SET source_json=json_set(source_json, '$.body', '') WHERE complete=1;");
+      // Old work-note receipts must not consume a start/stop from the same message.
+      this.db.exec(`UPDATE receipts SET source='note:' || source
+        WHERE EXISTS (SELECT 1 FROM audit WHERE audit.source=receipts.source AND action='note')
+        AND NOT EXISTS (SELECT 1 FROM entries WHERE start_message=receipts.source OR stop_message=receipts.source)
+        AND NOT EXISTS (SELECT 1 FROM receipts AS notes WHERE notes.source='note:' || receipts.source);`);
       for (const row of this.db.prepare("SELECT DISTINCT contractor_id FROM unmatched_stops").all()) {
         const contractor = this.contractor(z.object({ contractor_id: id }).parse(row).contractor_id);
         for (const stop of this.unmatchedStops(contractor.id)) this.queueStopNotice(contractor, stop.message);
@@ -273,9 +280,10 @@ export class HoursLedger {
         : { start_ms: Number.MIN_SAFE_INTEGER, end_ms: Number.MAX_SAFE_INTEGER };
       const value = periodValue(report.entries, bounds);
       return { contractor: { id: report.contractor.id, name: report.contractor.name, timezone: report.contractor.timezone,
-          local_date: localTime(Date.now(), report.contractor.timezone).slice(0, 10), rate_cents: report.contractor.rate_cents },
+          local_date: localTime(Date.now(), report.contractor.timezone).slice(0, 10), rate_cents: report.contractor.rate_cents,
+          hourly_rate_text: `${usd(report.contractor.rate_cents)}/hour` },
         demands: report.demands.filter(d => d.active && !d.reported), total_hours: value.total_hours,
-        earnings: { currency: "USD", amount_usd_cents: value.amount_usd_cents, duration_ms: value.duration_ms,
+        earnings: { currency: "USD", amount_usd_cents: value.amount_usd_cents, amount_text: usd(value.amount_usd_cents), duration_ms: value.duration_ms, duration_text: duration(value.duration_ms),
           period_start: input.period_start ?? null, period_end: input.period_end ?? null, timezone: report.contractor.timezone,
           basis: "Closed recorded intervals at their captured rates; excludes open, unmatched and voided time. Not approval or payment." },
         pending_start: this.pendingStart(contractorId)?.source.created_at ?? null,
@@ -283,7 +291,7 @@ export class HoursLedger {
         open_entry: report.open_entry ? { start_ms: report.open_entry.start_ms, details: report.open_entry.details, rate_cents: report.open_entry.rate_cents, timezone: report.open_entry.timezone } : null,
         clock_language: "Use start immediately for clear work beginning now, even without a task or description. details records the worker's own overview; project is optional and must come from context. Ask what they are working on after recording the start. Their answer and later activity changes use note, keeping that clock open. Assigned demands are optional context, never required or approved tasks. confirm_start is only for a legacy pending start. Never clock uncertain intent, plans, questions, negations or historical statements.",
         entries: report.entries.filter(e => !e.voided && e.start_ms < bounds.end_ms && (e.end_ms ?? Number.MAX_SAFE_INTEGER) > bounds.start_ms)
-          .map(({ demand_id, start_ms, end_ms, details, rate_cents, timezone }) => ({ demand_id, start_ms, end_ms, details, rate_cents, timezone })),
+          .map(({ demand_id, start_ms, end_ms, details, rate_cents, timezone }) => ({ demand_id, start_ms, end_ms, details, rate_cents, hourly_rate_text: `${usd(rate_cents)}/hour`, timezone })),
         review_needed: report.review_needed,
         billing: (() => { const { fingerprint, expected, ...status } = this.billingReport(contractorId); return status; })() };
     }
@@ -292,8 +300,9 @@ export class HoursLedger {
       const old = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(key);
       if (old) return JSON.parse(receiptSchema.parse(old).response);
       const approved = this.billing.hasStoredApproval(contractorId);
-      const result = this.billing.submit(contractorId, input);
-      if (approved && !this.billing.hasStoredApproval(contractorId)) this.queueOwnerNotice(key, contractorId, "approval_revoked");
+      const submitted = this.billing.submit(contractorId, input);
+      const result = { ...submitted, approval_revoked: approved && !this.billing.hasStoredApproval(contractorId) };
+      if (result.approval_revoked) this.queueOwnerNotice(key, contractorId, "approval_revoked");
       this.audit(source, input.action, undefined, { contractor_id: contractorId, action: input.action, received: true });
       this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?)").run(key, JSON.stringify(result));
       return result;
@@ -514,17 +523,17 @@ export class HoursLedger {
   private queueClockReviewNotice(contractor: Contractor, input: ClockSource, reason: string) {
     const timezone = this.recordedClockSource(input)?.timezone ?? contractor.timezone;
     this.queueOwnerNotice(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, "clock_review",
-      `${contractor.name} tem um registro de horas pendente de revisão em ${localTime(Date.parse(input.created_at), timezone)}. ${reason} Confirme os horários corretos aqui no privado para eu ajustar o registro.`);
+      `${contractor.name} tem um registro de horas pendente de revisão em ${clockTime(Date.parse(input.created_at), timezone, "pt")}. ${reason} Confirme os horários corretos aqui no privado para eu ajustar o registro.`);
   }
 
   private queueStopNotice(contractor: Contractor, input: ClockSource) {
     const pending = this.pendingStart(contractor.id), finish = Date.parse(input.created_at);
     const timezone = this.recordedClockSource(input)?.timezone ?? contractor.timezone;
     const question = pending && Date.parse(pending.source.created_at) < finish
-      ? `Há também um início pendente em ${localTime(Date.parse(pending.source.created_at), pending.timezone)}. Confirma que esses registros formam o mesmo período de trabalho?`
+      ? `Há também um início pendente em ${clockTime(Date.parse(pending.source.created_at), pending.timezone, "pt")}. Confirma que esses registros formam o mesmo período de trabalho?`
       : "Qual foi o horário de entrada? Confirme aqui no privado para eu consolidar esse período.";
     this.queueOwnerNotice(JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]), contractor.id, "clock_review",
-      `${contractor.name} registrou uma saída em ${localTime(finish, timezone)}, mas não há um ponto de entrada aberto. ${question} As horas desse período ainda não foram contabilizadas.`);
+      `${contractor.name} registrou uma saída em ${clockTime(finish, timezone, "pt")}, mas não há um ponto de entrada aberto. ${question} As horas desse período ainda não foram contabilizadas.`);
   }
 
   completeOwnerNotice(source: string) {
@@ -545,8 +554,9 @@ export class HoursLedger {
     input = this.recordedClockSource(input)?.source ?? clockSourceSchema.parse(input);
     const ms = Date.parse(input.created_at);
     const source = JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]);
+    const receiptSource = command.kind === "note" ? `note:${source}` : source;
     return this.transaction(() => {
-      const receipt = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(source);
+      const receipt = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(receiptSource);
       if (receipt) return receiptSchema.parse(receipt).response;
       let response: string;
       const active = this.open(contractor.id), say = RECEIPTS[contractor.language];
@@ -592,7 +602,7 @@ export class HoursLedger {
       else {
         response = this.finishClock(active, ms, command.detail, source);
       }
-      this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?)").run(source, response);
+      this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?)").run(receiptSource, response);
       return response;
     });
   }
@@ -727,6 +737,9 @@ export class HoursLedger {
             if (existing.project === input.project && existing.summary === input.summary && existing.references === input.references) return { demand_id: input.id, registered: true };
             throw new Error("Demand already exists. Register a new demand to preserve past attribution.");
           }
+          const matching = this.db.prepare('SELECT id FROM demands WHERE contractor_id = ? AND project = ? AND summary = ? AND "references" = ? AND active = 1 ORDER BY id LIMIT 1')
+            .get(input.contractor_id, input.project, input.summary, input.references);
+          if (matching) return { demand_id: z.object({ id }).parse(matching).id, registered: true, reused: true };
           this.db.prepare('INSERT INTO demands(id, contractor_id, project, summary, "references") VALUES (?, ?, ?, ?, ?)')
             .run(input.id, input.contractor_id, input.project, input.summary, input.references);
           this.bump(input.contractor_id);

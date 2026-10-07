@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
-import { renderConfig, syncConfig } from '/opt/plow/boot/config.js';
+import { renderConfig, syncConfig } from '/opt/plow/boot/ours-config.js';
 import { probeIdentity } from '/opt/plow/boot/probe-fixture.js';
 import { startGateway } from '/opt/plow/boot/process.js';
 
@@ -8,7 +8,7 @@ process.env.PLOW_AGENT_TOKEN='probe-'+randomBytes(16).toString('hex');
 process.env.OPENCLAW_GATEWAY_PASSWORD=randomBytes(32).toString('hex');
 delete process.env.OPENCLAW_GATEWAY_TOKEN;
 await mkdir('/var/lib/plow/workspace',{recursive:true});
-await syncConfig(renderConfig(probeIdentity,'http://127.0.0.1:1'),'/var/lib/plow/openclaw.json','/etc/plow/openclaw');
+await syncConfig(renderConfig({...probeIdentity,owner_uid:"mem_probe"},'http://127.0.0.1:1'),'/var/lib/plow/openclaw.json','/etc/plow/openclaw');
 const child=await startGateway(true);
 let success=false;
 const deadline=setTimeout(()=>{console.error('Ours probe timed out');process.kill(process.pid,'SIGTERM');},120000);

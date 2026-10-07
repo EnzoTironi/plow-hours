@@ -22,6 +22,41 @@ function fixture(t: TestContext) {
     report() { const r = ledger.report("ana")[0]; assert.ok(r); return r; } };
 }
 
+test("a work note and finish from one message both commit once, including after restart", t => {
+  const f = fixture(t);
+  f.ledger.clock(f.source("start", "09:00"), { kind: "start", detail: "landing" });
+  const finish = f.source("finish", "10:00", "Worked on checkout fixes and finished now");
+  const note = f.ledger.clock(finish, { kind: "note", detail: "Checkout fixes" });
+  assert.equal(f.ledger.clockChangeReceipt(finish), undefined);
+  f.restart();
+  const stopped = f.ledger.clock(finish, { kind: "stop", detail: "" });
+  assert.equal(f.report().open_entry, null);
+  assert.equal(f.report().total_hours, 1);
+  assert.equal(f.report().entries.length, 1);
+  assert.equal(f.report().entries[0]?.details, "Checkout fixes");
+  f.restart();
+  assert.equal(f.ledger.clock(finish, { kind: "note", detail: "Checkout fixes" }), note);
+  assert.equal(f.ledger.clock(finish, { kind: "stop", detail: "" }), stopped);
+  assert.equal(f.report().entries[0]?.details, "Checkout fixes");
+  assert.equal(f.report().total_hours, 1);
+});
+
+test("a legacy note receipt is migrated without losing the note or blocking its finish", t => {
+  const f = fixture(t);
+  f.ledger.clock(f.source("start", "09:00"), { kind: "start", detail: "landing" });
+  const finish = f.source("finish", "10:00");
+  const note = f.ledger.clock(finish, { kind: "note", detail: "Checkout fixes" });
+  const key = JSON.stringify([finish.line_uid, finish.chat_uid, finish.message_uid]);
+  const db = new DatabaseSync(join(f.directory, "hours.sqlite"));
+  db.prepare("UPDATE receipts SET source=? WHERE source=?").run(key, `note:${key}`);
+  db.close();
+  f.restart();
+  assert.equal(f.ledger.clock(finish, { kind: "note", detail: "Checkout fixes" }), note);
+  f.ledger.clock(finish, { kind: "stop", detail: "" });
+  assert.equal(f.report().total_hours, 1);
+  assert.equal(f.report().entries[0]?.details, "Checkout fixes");
+});
+
 test("one natural task switch preserves every minute and both rates, with all-or-nothing replay", t => {
   const f = fixture(t);
   f.ledger.clock(f.source("start", "09:00"), { kind: "start", detail: "landing" });
@@ -255,7 +290,7 @@ test("an owner reconciles a legacy start and stop with the original rate, source
   f.ledger.clock(stop, { kind: "stop", detail: "Animation for Rowan" });
   const notice = f.ledger.pendingOwnerNotices()[0];
   assert.ok(notice); assert.equal(notice.kind, "clock_review");
-  assert.match(notice.body, /19:03:00 GMT-7/); assert.match(notice.body, /02:18:00 GMT/);
+  assert.match(notice.body, /19:03.*GMT-7/); assert.match(notice.body, /02:18.*(?:UTC|GMT)/);
   assert.equal(f.report().total_hours, 0);
   f.restart();
   const correction = { action: "reconcile_stop", contractor_id: "ana", stop_message_uid: stop.message_uid,

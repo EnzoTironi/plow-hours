@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import entry from "../plugin/index.ts";
+import entry from "./ours-entry.ts";
 import { renderPrompt } from "../boot/prompt.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
@@ -62,7 +62,7 @@ test("only the verified private owner turn can fetch the hours and OpenClaw URLs
       ["http://localhost:3331/", "http://localhost:3331/hours", "http://localhost:3331/openclaw/"],
     ]) {
       webUrl = url;
-      const details = { url: hoursUrl, openclaw_url: openclawUrl, view: "hours", owner_only: true };
+      const details = { url: hoursUrl, openclaw_url: openclawUrl, view: "hours", owner_only: true, read_only: true };
       assert.deepEqual(await tool.execute("dashboard", { action: "dashboard" }), { content: [{ type: "text", text: JSON.stringify(details) }], details });
     }
     await assert.rejects(() => tool.execute("injected-url", { action: "dashboard", url: "https://other.example.test" }));

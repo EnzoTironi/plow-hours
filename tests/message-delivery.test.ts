@@ -4,7 +4,7 @@ import { z } from "zod";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import type { ReplyPayload, ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
-import entry from "../plugin/index.ts";
+import entry from "./ours-entry.ts";
 import { hoursLedger } from "../plugin/hours.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
@@ -18,22 +18,27 @@ const postSchema = z.object({ body: z.string(), attachment_uids: z.array(z.strin
 type Dispatch = {
   replyOptions: { disableBlockStreaming?: boolean; turnAdoptionLifecycle: { onAdopted(): Promise<void> } };
   delivery: {
+    durable?(): Promise<{ to: string; replyToId: null }>;
     preparePayload(payload: ReplyPayload, info: ReplyDispatchRuntimeInfo): ReplyPayload | null;
     deliver(payload: ReplyPayload): Promise<unknown>;
   };
 };
 
 for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
-  for (const mode of ["reply", "silent", "error", "empty", "tool-syntax", "attention-narration"]) {
-    const silent = mode === "silent";
-    const failed = mode === "error" || mode === "empty" || mode === "tool-syntax" || mode === "attention-narration";
+  for (const mode of ["reply", "silent", "error", "empty", "tool-syntax", "attention-narration", ...(route === "owner-group" ? ["private-report"] : []), ...(route !== "owner-dm" ? ["attention-silent", "attention-error"] : [])]) {
+    const silent = mode === "silent" || mode === "attention-narration" || mode === "attention-silent";
+    const failed = mode === "error" || mode === "empty" || mode === "tool-syntax" || mode === "attention-error";
     test(`${route} ${mode}: model controls attention and only a completed final or deliberate silence is terminal`, async t => {
       const { server, apiBase, abortAfter } = await websocketFixture(t);
       hoursLedger().manage({ action: "contractor", id: "daniel", name: "Daniel", handle: worker.provider_key,
-        chat_uid: group.uid, timezone: "America/Los_Angeles", rate_cents: 500000 }, "register-daniel");
+        chat_uid: group.uid, timezone: "America/Los_Angeles", rate_cents: 500000, language: "en" }, "register-daniel");
       const posts: { path: string; body: string }[] = [];
       t.mock.method(globalThis, "fetch", async (url: string, options?: RequestInit) => {
         const path = new URL(url).pathname;
+        if (path === "/v1/chat/completions") {
+          if (mode === "attention-error") return Response.json({ error: "unavailable" }, { status: 503 });
+          return Response.json({ choices: [{ message: { content: JSON.stringify({ participate: mode !== "attention-silent" }) } }] });
+        }
         if (path.endsWith("/ws/ticket")) return Response.json({ ticket: "fixture" });
         if (path === "/v1/chats") return Response.json({ data: [home, group], has_more: false });
         if (path.endsWith("/messages")) {
@@ -56,11 +61,21 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
           body: silent ? "Daniel, please set up your own account." : "How can I record hours?" } },
       })));
       const account = { apiBase, accountId: "chat", lineUid: "line", threadTrust: "untrusted" };
-      const cfg = { agents: { entries: { main: { identity: { name: "Alder" } } } }, channels: { plow: account } };
+      const cfg = { agents: { entries: { main: { identity: { name: "Alder" } } } }, channels: { plow: account }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
       let channel: { gateway: { startAccount(value: object): Promise<void> } } | undefined;
       let dispatches = 0;
-      const finalText = "Tell me here when you start or finish working.";
-      entry.register({ registrationMode: "full", logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
+
+      const finalText = mode === "private-report" ? "Daniel's private report: USD 5000/hour." : "Tell me here when you start or finish working.";
+      let reportTool;
+      const sourceBinding = { line_uid: "line", chat_uid: group.uid, handle: owner.provider_key,
+        message_uid: "latest-message", created_at: "2026-10-06T00:00:00Z", body: "How can I record hours?" };
+      entry.register({ registrationMode: "full", logger: { info() {} }, registerTool(factory) {
+        if (mode !== "private-report") return;
+        const tool = factory({ config: cfg, sessionKey: "agent:main:plow:owner-group:" + group.uid,
+          messageChannel: "plow", agentAccountId: "chat", nativeChannelId: group.uid,
+          requesterSenderId: "plow-owner", senderIsOwner: true, toolBindings: { plowHoursOwner: sourceBinding } });
+        if (tool?.name === "plow_hours") reportTool = tool;
+      }, registerHttpRoute() {},
         registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
         runtime: { channel: { routing: { resolveAgentRoute }, session: { resolveStorePath, updateLastRoute }, inbound: {
           buildContext(raw: unknown) { return { SessionKey: contextSchema.parse(raw).route.sessionKey }; },
@@ -89,8 +104,12 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
               return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: mode === "error",
                 counts: { tool: 0, block: 0, final: 0 } } };
             }
+            if (mode === "private-report") {
+              assert.ok(reportTool);
+              await reportTool.execute("private-report", { action: "report", contractor_id: "daniel" });
+            }
             const final: ReplyPayload = silent
-              ? { text: "The owner is talking to Daniel.\nNO_REPLY\nI should stay quiet.", mediaUrls: ["https://private.example.test/internal.png"] }
+              ? { text: "No visible action is needed.\nNO_REPLY", mediaUrls: ["https://private.example.test/internal.png"] }
               : { text: finalText };
             const prepared = delivery.preparePayload(final, { kind: "final" });
             if (silent) {
@@ -98,6 +117,10 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
               assert.equal(delivery.preparePayload({ text: "NO_REPLY" }, { kind: "final" }), null);
             } else {
               assert.ok(prepared);
+              if (mode === "private-report") {
+                assert.ok(delivery.durable);
+                assert.equal((await delivery.durable()).to, home.uid, "Native durable delivery persists the actual private destination");
+              }
               await delivery.deliver(prepared);
             }
             return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: silent,
@@ -113,11 +136,14 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
         logs.push(value); if (value.includes(completed)) controller.abort();
       } } });
       assert.ok(logs.some(value => value.includes(completed)), logs.join("\n"));
-      const destination = route === "contractor-group" ? group : home;
-      assert.deepEqual(posts, silent || failed ? [] : [{ path: `/v1/chats/${destination.uid}/messages`, body: finalText }]);
+      const destination = route === "owner-dm" || mode === "private-report" ? home : group;
+      assert.deepEqual(posts, silent || failed ? [] : [
+        ...(mode === "private-report" ? [{ path: `/v1/chats/${group.uid}/messages`, body: "I'll reply privately." }] : []),
+        { path: `/v1/chats/${destination.uid}/messages`, body: finalText },
+      ]);
       assert.equal(hoursLedger().report("daniel")[0]?.entries.length, 0);
-      assert.equal(dispatches, 1);
-      const reason = mode === "silent" ? "model_silent" : mode === "error" ? "model_error" : mode === "empty" ? "empty_reply" : (mode === "tool-syntax" || mode === "attention-narration") ? "internal_protocol" : "delivered";
+      assert.equal(dispatches, mode.startsWith("attention-") && mode !== "attention-narration" ? 0 : 1);
+      const reason = mode === "attention-error" ? "attention_failed" : silent ? "model_silent" : mode === "error" ? "model_error" : mode === "empty" ? "empty_reply" : (mode === "tool-syntax" || mode === "attention-narration") ? "internal_protocol" : "delivered";
       assert.ok(logs.some(value => value.includes(`reply_outcome chat=${source.uid}`) && value.includes(`reason=${reason}`)), logs.join("\n"));
       if (failed) assert.ok(!logs.some(value => value.includes("stage=terminal")), "A failed or empty turn must not be completed as deliberate silence");
       if (failed && route === "contractor-group") {

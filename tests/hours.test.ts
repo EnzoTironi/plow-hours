@@ -36,14 +36,17 @@ test("a contractor sees their own recorded value at USD 5000 per hour, with capt
   f.ledger.manage({ action: "demand", id: "private", contractor_id: "ben", project: "Other project", summary: "Other work" }, "other-work");
   f.ledger.manage({ action: "manual", contractor_id: "ben", demand_id: "private", start: "2026-10-05T19:00:00-07:00", finish: "2026-10-05T20:00:00-07:00", rate_cents: 77_777, reason: "Other worker's confirmed interval" }, "other-hours");
   f.restart();
-  const schema = z.object({ contractor: z.object({ rate_cents: z.number() }), total_hours: z.number(),
-    earnings: z.object({ amount_usd_cents: z.number(), duration_ms: z.number() }),
-    entries: z.array(z.object({ rate_cents: z.number() })), pending_clock: z.object({ unmatched_stops: z.number() }) });
+  const schema = z.object({ contractor: z.object({ rate_cents: z.number(), hourly_rate_text: z.string() }), total_hours: z.number(),
+    earnings: z.object({ amount_usd_cents: z.number(), amount_text: z.string(), duration_ms: z.number() }),
+    entries: z.array(z.object({ rate_cents: z.number(), hourly_rate_text: z.string() })), pending_clock: z.object({ unmatched_stops: z.number() }) });
   const raw = f.ledger.self({ action: "report", period_start: "2026-10-05", period_end: "2026-10-05" }, "ana", "earnings");
   const report = schema.parse(raw);
   assert.equal(report.contractor.rate_cents, 250_000); assert.equal(report.entries[0]?.rate_cents, 500_000);
   assert.equal(report.total_hours, 8.5 / 60); assert.equal(report.earnings.duration_ms, 510_000);
   assert.equal(report.earnings.amount_usd_cents, 70_833);
+  assert.equal(report.contractor.hourly_rate_text, "USD 2500.00/hour");
+  assert.equal(report.entries[0]?.hourly_rate_text, "USD 5000.00/hour");
+  assert.equal(report.earnings.amount_text, "USD 708.33");
   assert.equal(report.pending_clock.unmatched_stops, 1); assert.equal(report.entries.length, 1);
   assert.doesNotMatch(JSON.stringify(raw), /Other Worker|Other project|77777/);
   assert.throws(() => f.ledger.self({ action: "report", contractor_id: "ben" }, "ana", "other"));
@@ -51,6 +54,7 @@ test("a contractor sees their own recorded value at USD 5000 per hour, with capt
   f.clock("comecei landing", "2026-10-05T20:00:00-07:00"); f.clock("parei", "2026-10-05T20:01:00-07:00");
   const zero = schema.parse(f.ledger.self({ action: "report" }, "ana", "known-zero"));
   assert.equal(zero.contractor.rate_cents, 0); assert.equal(zero.entries[1]?.rate_cents, 0);
+  assert.equal(zero.contractor.hourly_rate_text, "USD 0.00/hour");
   assert.equal(zero.earnings.amount_usd_cents, 70_833); assert.equal(zero.earnings.duration_ms, 570_000);
 });
 
@@ -191,6 +195,17 @@ test("only a registered sender in their registered thread can clock work, includ
   assert.match(f.clock("comecei outra", "2026-10-02T12:00:00Z") ?? "", /Ponto iniciado/);
   assert.equal(f.snapshot().entries.length, 1);
   assert.equal(f.snapshot().open_entry?.details, "outra");
+});
+
+test("repeating the same work with another generated ID reuses its saved assignment", t => {
+  const f = fixture(t);
+  const work = { action: "demand", contractor_id: "ana", project: "Website", summary: "Build the landing page", references: "github.com/team/site/issues/42" };
+  assert.deepEqual(f.ledger.manage({ ...work, id: "another-generated-id" }, "repeat-work"), { demand_id: "landing", registered: true, reused: true });
+  f.restart();
+  assert.deepEqual(f.ledger.manage({ ...work, id: "retry-after-restart" }, "repeat-after-restart"), { demand_id: "landing", registered: true, reused: true });
+  assert.equal(f.snapshot().demands.length, 1);
+  f.ledger.manage({ ...work, id: "different-reference", references: "github.com/team/site/issues/43" }, "distinct-work");
+  assert.equal(f.snapshot().demands.length, 2);
 });
 
 test("each contractor can use the same demand id and cannot access another contractor's session", t => {

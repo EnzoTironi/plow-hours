@@ -83,7 +83,7 @@ test("an unmatched stop asks the owner privately for reconciliation once and a r
   });
   const account = { apiBase: "http://notice-fixture", accountId: "chat", lineUid: "line" };
   await flushHoursNotices(account); await flushHoursNotices(account);
-  assert.equal(sent.length, 1); assert.match(sent[0] ?? "", /Ana.*19:18:00 GMT-7/);
+  assert.equal(sent.length, 1); assert.match(sent[0] ?? "", /Ana.*19:18.*GMT-7/);
   assert.match(sent[0] ?? "", /horário de entrada/);
   const earlier = { ...source, message_uid: "arrived-late", created_at: "2026-10-05T19:03:00-07:00" };
   ledger.clock(earlier, { kind: "start", detail: "Animation for Rowan" });

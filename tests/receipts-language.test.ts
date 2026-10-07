@@ -25,8 +25,8 @@ function fixture(t: TestContext, language?: "en" | "pt", directory = mkdtempSync
 
 test("an English contractor's /in and /out receipts are English, with a clock time and minutes", t => {
   const f = fixture(t, "en");
-  assert.match(f.clock("/in", "2026-07-15T21:41:40-07:00") ?? "", /^Clock started at Jul 15, 9:41\sPM PDT\.$/);
-  assert.match(f.clock("/out", "2026-07-15T21:46:57-07:00") ?? "", /^Clock stopped at Jul 15, 9:46\sPM PDT\. Total: 5 min\.$/);
+  assert.match(f.clock("/in", "2026-07-15T21:41:40-07:00") ?? "", /^Clock started at Jul 15, 9:41\sPM PDT\. What are you working on\?$/);
+  assert.match(f.clock("/out", "2026-07-15T21:46:57-07:00") ?? "", /^Clock stopped at Jul 15, 9:46\sPM PDT\. Total: 5 min 17 s\.$/);
   assert.match(f.clock("/hours", "2026-07-15T21:47:00-07:00") ?? "", /^No clock running\./);
 });
 
@@ -34,7 +34,7 @@ test("a contractor registered without a language keeps Portuguese receipts, now 
   const f = fixture(t);
   f.clock("/in", "2026-07-15T21:41:40-07:00");
   const stop = f.clock("/out", "2026-07-15T21:46:57-07:00") ?? "";
-  assert.match(stop, /^Ponto encerrado às 15 de jul\.?, 21:46 GMT-7\. Total: 5 min\.$/);
+  assert.match(stop, /^Ponto encerrado às 15 de jul\.?, 21:46 GMT-7\. Total: 5 min 17 s\.$/);
   assert.doesNotMatch(stop, /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|0\.08/);
 });
 
@@ -68,8 +68,8 @@ test("the receipts sent in a contractor's group are available to the next model 
 });
 
 test("durations read like a timesheet", () => {
-  assert.equal(duration(34_000), "1 min");
-  assert.equal(duration(317_000), "5 min");
+  assert.equal(duration(34_000), "34 s");
+  assert.equal(duration(317_000), "5 min 17 s");
   assert.equal(duration(80 * 60_000), "1 h 20 min");
   assert.equal(duration(2 * 3_600_000), "2 h");
 });
