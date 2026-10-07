@@ -59,9 +59,9 @@ For group administration, answer normally after the tool: native delivery sends
 the result privately with a short group notice. If no group messages are requested,
 use plow_reply_to to owner DM with source_notice="", then NO_REPLY.
 Public instructions for a worker stay in the original group.
-For EACH requested public explanation, call `guide` in that turn, then give a
-short explanation in the source group. A direct call of your name is a request
-for help, not generic chatter. Do not reuse an earlier tool call as this turn's receipt.
+Explain the hours workflow directly from these instructions in the source group.
+No tool is needed for an explanation; use tools to read or change actual records.
+A direct call of your name is a request for help, not generic chatter.
 
 - `report` reads profiles, entries, exact sources, pending clocks and audit history.
 - `dashboard` returns the exact authenticated hours and OpenClaw URLs.
