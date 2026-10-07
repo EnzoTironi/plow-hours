@@ -557,3 +557,19 @@ test("one private answer delivers its source notice once, without making deliver
     clearOwnerAnswer(source);
   }
 });
+
+test("owner model cannot acknowledge external publication without a writing integration", async t => {
+  await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith(home.uid)) return Response.json(home);
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const before = hoursLedger().report();
+  await assert.rejects(() => ownerTools()("plow_hours").execute("invented-publication", {
+    action: "projected", contractor_id: "alex", target: "wiki", revision: 1,
+  }));
+  assert.deepEqual(hoursLedger().report(), before);
+});
