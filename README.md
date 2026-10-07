@@ -344,6 +344,18 @@ using a controlled local model fixture, without external model usage.
 `-e EVAL_PHASE=semantic_payment` tests owner requests without mentions, quiet human
 conversation, direct Pix and ACH registration before billing, private owner
 retrieval, contractor isolation and clocks through the real model and tools.
+Run the complete regression suite against one immutable local image:
+
+```sh
+export PLOW_AGENT_TOKEN="$(cat ~/.config/plow/token)"
+python3 evals/run-suite.py --image plow-hours:test --output ../ours-e2e
+```
+
+The runner limits execution to two isolated conversations at a time and records
+checks, conversation logs and the image ID. Use `--phases public_routing open_correction`
+for a focused run. Public routing covers the original group, a rapid follow-up,
+private dashboard delivery and an owner correction that leaves the clock open.
+
 These evaluations send no production messages. Live Apple iMessage delivery,
 hosted deployment and the chosen off-host backup destination need separate checks.
 
