@@ -132,7 +132,8 @@ test("direct Pix details bind the billing approval to the exact key; legacy data
   assert.deepEqual(before.payment, payment);
   assert.ok(before.ready_for_owner_review && before.fingerprint);
   f.ledger.manage({ action: "approve_billing", contractor_id: "ana", fingerprint: before.fingerprint }, "approval");
-  f.ledger.self({ action: "payment_details", payment: { ...payment, key: "updated-payments@example.test" } }, "ana", "raw-pix-update");
+  const receipt = f.ledger.self({ action: "payment_details", payment: { ...payment, key: "updated-payments@example.test" } }, "ana", "raw-pix-update");
+  assert.equal(z.object({ approval_revoked: z.boolean() }).parse(receipt).approval_revoked, true);
   assert.equal(f.report().approved, false);
   assert.notEqual(f.report().fingerprint, before.fingerprint);
   assert.ok(!JSON.stringify(f.ledger.report()).includes(payment.key));

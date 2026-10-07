@@ -300,8 +300,9 @@ export class HoursLedger {
       const old = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(key);
       if (old) return JSON.parse(receiptSchema.parse(old).response);
       const approved = this.billing.hasStoredApproval(contractorId);
-      const result = this.billing.submit(contractorId, input);
-      if (approved && !this.billing.hasStoredApproval(contractorId)) this.queueOwnerNotice(key, contractorId, "approval_revoked");
+      const submitted = this.billing.submit(contractorId, input);
+      const result = { ...submitted, approval_revoked: approved && !this.billing.hasStoredApproval(contractorId) };
+      if (result.approval_revoked) this.queueOwnerNotice(key, contractorId, "approval_revoked");
       this.audit(source, input.action, undefined, { contractor_id: contractorId, action: input.action, received: true });
       this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?)").run(key, JSON.stringify(result));
       return result;

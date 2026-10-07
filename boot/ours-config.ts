@@ -47,7 +47,8 @@ export function renderConfig(identity: Identity, base: string, trust = process.e
       } },
     },
     agents: { ...config.agents, defaults: { ...config.agents.defaults,
-      bootstrapMaxChars: 32000, userTimezone: "America/Sao_Paulo", model: { primary, fallbacks: [fallback] },
+      bootstrapMaxChars: 32000, userTimezone: "America/Sao_Paulo",
+      heartbeat: { every: "0m", target: "none" }, model: { primary, fallbacks: [fallback] },
     } },
     models: { providers: { plow: { ...config.models.providers.plow, models: [
       { id: "openai/gpt-6-sol", name: "GPT 6 Sol", reasoning: true, input: ["text", "image"], contextWindow: 1050000, maxTokens: 128000 },
@@ -96,6 +97,8 @@ export async function syncConfig(config: ReturnType<typeof renderConfig>, path: 
   owner.agents ??= {};
   owner.agents.defaults ??= {};
   owner.agents.defaults.bootstrapMaxChars = { $include: promptPath };
+  owner.agents.defaults.heartbeat = { every: "0m", target: "none" };
+  if (owner.agents.entries?.main) owner.agents.entries.main.heartbeat = { every: "0m", target: "none" };
   await writeFile(`${path}.tmp`, JSON.stringify(Object.fromEntries(Object.entries(owner).sort(([a], [b]) => a.localeCompare(b))), null, 2) + "\n", { mode: 0o600 });
   await rename(`${path}.tmp`, path);
 }
