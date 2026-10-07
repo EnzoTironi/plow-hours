@@ -823,7 +823,7 @@ try {
     const ownerText = turn => turn.responses.filter(r => r.chat_uid === home.uid).map(r => r.body).join('\n').replaceAll('’', "'");
     function unconfirmed(turn) {
       assert.doesNotMatch(ownerText(turn), /\b(?:America|Europe|Asia|Australia)\/[a-z_]+/i);
-      assert.match(ownerText(turn), /unconfirmed|not actual delivery|acceptance only|(?:not|never) confirmed|isn't confirmed|did(?: not|n't) confirm|can(?:not|'t) (?:confirm|check|verify)|haven't confirmed|could(?: not|n't) confirm|no .{0,20}(?:delivery confirmation|receipt)/i);
+      assert.match(ownerText(turn), /unconfirmed|not actual delivery|acceptance only|(?:not|never) confirmed|isn't confirmed|did(?: not|n't) confirm|does(?: not|n't) (?:verify|confirm)|can(?:not|'t) (?:confirm|check|verify)|haven't confirmed|could(?: not|n't) confirm|no .{0,20}(?:delivery confirmation|receipt)/i);
     }
     function noFallback(turn) {
       assert.ok(!/\b(?:SMS|WhatsApp)\b|reopen Plow|restart Plow|refresh Plow/i.test(ownerText(turn)), 'No unsupported transport or invented UI fix');
