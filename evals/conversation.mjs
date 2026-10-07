@@ -333,7 +333,12 @@ async function say(who, chatUid, body, created_at = new Date().toISOString(), { 
     responses: deliveries.slice(from).map(({ body, chat_uid }) => ({ body, chat_uid })), model_requests: modelRequests.length - beforeModels,
     tool_calls: [...toolCalls.values()].filter(call => !beforeTools.has(call.id)), model_protocol_calls: [...protocolCalls.values()].filter(call => !beforeProtocol.has(call.id)), duration_ms: Date.now() - started };
   turns.push(turn); console.log('TURN ' + turns.length + ' ' + who.display_name + ': ' + body + '\n' + turn.responses.map(r => r.body).join('\n'));
-  await save(); return turn;
+  await save();
+  if (!controlledRecovery) {
+    assert.ok(!gatewayLog.includes(`turn failed chat=${chatUid} message=${uid}`), 'A failed gateway turn cannot pass a conversation check');
+    assert.ok(turn.responses.every(r => !/OpenClaw couldn.t produce or deliver a reply/i.test(r.body)), 'A gateway error is not a successful answer');
+  }
+  return turn;
 }
 async function sayBurst(who, chatUid, bodies) {
   const from = deliveries.length;
@@ -425,7 +430,7 @@ try {
     gatewayLog += chunk.toString();
     if (process.env.EVAL_LOG === '1') process.stderr.write(chunk);
   });
-  await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
+  await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 300_000);
   if (newGroup) check('The image entrypoint resolves identity and boots the real gateway', () => {
     assert.ok(gatewayLog.includes('plow-boot: identity resolved to ' + self.line.uid));
     if (process.env.EVAL_CODEX_AUTH) assert.ok(gatewayLog.includes('agent model: plow/openai/gpt-6-luna'));

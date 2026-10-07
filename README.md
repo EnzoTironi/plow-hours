@@ -365,7 +365,10 @@ and malformed-response cases use explicitly labeled controlled completions.
 Results describe the tested model; they do not establish another model's behavior.
 
 The runner limits execution to two isolated conversations at a time and records
-checks, conversation logs and the image ID. Use `--phases public_routing open_correction`
+checks, conversation logs and the image ID. Test state lives in a disposable
+memory filesystem; transcripts and ledger snapshots are saved in the output
+directory. Use `--jobs 1` when other agents are running locally.
+Use `--phases public_routing open_correction`
 for a focused run. Public routing covers the original group, a rapid follow-up,
 private dashboard delivery and an owner correction that leaves the clock open.
 

@@ -38,6 +38,7 @@ def run(phase):
         auth_args = ['-e', 'PLOW_AGENT_TOKEN=local-fixture-only', '-e', 'EVAL_CODEX_AUTH=/run/eval-codex',
                      '-v', f'{args.codex_auth}:/run/eval-codex/auth.json:ro'] if args.codex_auth else ['-e', 'PLOW_AGENT_TOKEN']
         result = subprocess.run(['docker', 'run', '--rm', '--user', 'root',
+            '--tmpfs', '/var/lib/plow:rw,size=256m',
             '--entrypoint', 'node', *auth_args, '-e', f'EVAL_PHASE={phase}',
             '-e', 'EVAL_LOG=1', '-e', 'EVAL_OUTPUT=/evidence',
             '-v', f'{root}:/opt/plow/evals:ro', '-v', f'{output}:/evidence',
