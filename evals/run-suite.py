@@ -16,8 +16,12 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--image', required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--phases', nargs='+', choices=PHASES, default=PHASES)
+parser.add_argument('--codex-auth', type=Path, help='Read-only Codex auth.json for local Luna tests')
+parser.add_argument('--jobs', type=int, choices=[1, 2], default=2)
 args = parser.parse_args()
-if not os.environ.get('PLOW_AGENT_TOKEN'):
+if args.codex_auth:
+    args.codex_auth = args.codex_auth.resolve(strict=True)
+elif not os.environ.get('PLOW_AGENT_TOKEN'):
     parser.error('Set PLOW_AGENT_TOKEN for real model requests.')
 image = subprocess.check_output(['docker', 'image', 'inspect', args.image,
                                  '--format', '{{.Id}}'], text=True).strip()
@@ -31,8 +35,10 @@ def run(phase):
     output = args.output / phase
     output.mkdir(exist_ok=True)
     with (output / 'run.log').open('w') as log:
+        auth_args = ['-e', 'PLOW_AGENT_TOKEN=local-fixture-only', '-e', 'EVAL_CODEX_AUTH=/run/eval-codex',
+                     '-v', f'{args.codex_auth}:/run/eval-codex/auth.json:ro'] if args.codex_auth else ['-e', 'PLOW_AGENT_TOKEN']
         result = subprocess.run(['docker', 'run', '--rm', '--user', 'root',
-            '--entrypoint', 'node', '-e', 'PLOW_AGENT_TOKEN', '-e', f'EVAL_PHASE={phase}',
+            '--entrypoint', 'node', *auth_args, '-e', f'EVAL_PHASE={phase}',
             '-e', 'EVAL_LOG=1', '-e', 'EVAL_OUTPUT=/evidence',
             '-v', f'{root}:/opt/plow/evals:ro', '-v', f'{output}:/evidence',
             image, '/opt/plow/evals/conversation.mjs'], stdout=log, stderr=subprocess.STDOUT)
@@ -46,7 +52,7 @@ def run(phase):
     return row
 
 try:
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
         results = list(executor.map(run, args.phases))
 finally:
     subprocess.run(["docker", "image", "rm", retained_image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

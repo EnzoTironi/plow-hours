@@ -351,6 +351,19 @@ export PLOW_AGENT_TOKEN="$(cat ~/.config/plow/token)"
 python3 evals/run-suite.py --image plow-hours:test --output ../ours-e2e
 ```
 
+To test locally with your Codex subscription and Luna instead of the Plow model
+API, pass your local authentication file. The runner mounts it read-only in
+disposable containers; it never copies it into the image or repository.
+
+```sh
+python3 evals/run-suite.py --image plow-hours:test \
+  --codex-auth "$HOME/.codex/auth.json" --output ../ours-luna-e2e
+```
+
+This uses `gpt-6-luna` for real responses and group attention decisions. Recovery
+and malformed-response cases use explicitly labeled controlled completions.
+Results describe the tested model; they do not establish another model's behavior.
+
 The runner limits execution to two isolated conversations at a time and records
 checks, conversation logs and the image ID. Use `--phases public_routing open_correction`
 for a focused run. Public routing covers the original group, a rapid follow-up,

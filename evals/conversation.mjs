@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { backup, DatabaseSync } from 'node:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
-import { renderConfig, syncConfig } from '/opt/plow/boot/config.js';
+import { renderConfig, syncConfig } from '/opt/plow/boot/ours-config.js';
 import { renderPrompt } from '/opt/plow/boot/prompt.js';
 import { startGateway } from '/opt/plow/boot/process.js';
 import { HoursLedger } from '/opt/plow/plugin/dist/hours.js';
@@ -68,7 +69,7 @@ let dashboardReads = 0;
 let modelRecovered = false;
 let unconfirmedNoticeChat;
 let noticeAttempts = 0;
-const result = () => ({ provider: 'Simulated Plow iMessage HTTP/WebSocket', model: controlledRecovery ? 'Controlled model completions for gateway recovery testing' : process.env.EVAL_CODEX_AUTH ? 'Real OpenAI gpt-6-sol via authorized Codex OAuth' : 'Real Plow model API; no model or tool mocks', production_messages_sent: false, model_requests: modelRequests.length, model_request_tools: modelRequests, tool_calls: [...toolCalls.values()], group_requests: groupRequests, checks, turns });
+const result = () => ({ provider: 'Simulated Plow iMessage HTTP/WebSocket', model: controlledRecovery ? 'Controlled model completions for gateway recovery testing' : process.env.EVAL_CODEX_AUTH ? 'Real OpenAI gpt-6-luna via authorized Codex OAuth' : 'Real Plow model API; no model or tool mocks', production_messages_sent: false, model_requests: modelRequests.length, model_request_tools: modelRequests, tool_calls: [...toolCalls.values()], group_requests: groupRequests, checks, turns });
 async function save() { await writeFile(`${evidenceDirectory}/conversation.json`, JSON.stringify(result(), null, 2) + '\n'); }
 function check(name, fn) { fn(); checks.push({ name, passed: true }); console.log('PASS ' + name); }
 function send(chat, body) {
@@ -112,6 +113,17 @@ const server = createServer(async (req, res) => {
           let args; try { args = JSON.parse(call.function.arguments); } catch { args = call.function.arguments; }
           toolCalls.set(call.id, { id: call.id, name: call.function.name, args });
         }
+      }
+      if (process.env.EVAL_CODEX_AUTH) {
+        assert.equal(request.stream, false, 'Only the attention classifier uses this adapter; gateway completions use native OAuth');
+        const { runIsolatedCompletion } = await import('/app/dist/isolated-completion-IvsBFc3N.mjs');
+        const completion = await runIsolatedCompletion({ config, provider: 'openai', model: 'gpt-6-luna', agentId: 'main',
+          systemPrompt: request.messages[0].content + '\nReturn only JSON matching {"participate":boolean}.',
+          prompt: request.messages[1].content, timeoutMs: 60_000 });
+        observation.response_status = 200;
+        observation.response_text = completion.text;
+        observation.model = completion.model;
+        return json({ choices: [{ message: { content: completion.text }, finish_reason: 'stop' }] });
       }
       const response = await fetch('https://api.plow.co/v1/chat/completions', {
         method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -217,13 +229,13 @@ delete process.env.OPENCLAW_GATEWAY_TOKEN;
 await mkdir('/var/lib/plow/workspace', { recursive: true });
 const config = renderConfig({ owner_uid: 'owner-account', agent: { name: agentName, web_url: 'https://hours.example.test' }, line: self.line, chats: [home] }, apiBase, 'untrusted');
 await writeFile('/var/lib/plow/workspace/AGENTS.md', await renderPrompt(await readFile('/opt/plow/prompt/AGENTS.md', 'utf8'), null, token, 'untrusted', 'https://hours.example.test'));
-if (process.env.EVAL_CODEX_AUTH) {
-  config.agents.defaults.model = { primary: 'openai/gpt-6-sol', fallbacks: [] };
+if (process.env.EVAL_CODEX_AUTH && !controlledRecovery) {
+  config.agents.defaults.model = { primary: 'openai/gpt-6-luna', fallbacks: [] };
   config.agents.defaults.thinkingDefault = 'low';
   config.auth = { profiles: { 'openai:eval': { provider: 'openai', mode: 'oauth' } }, order: { openai: ['openai:eval'] } };
 }
 await syncConfig(config, '/var/lib/plow/openclaw.json', '/etc/plow/openclaw');
-if (process.env.EVAL_CODEX_AUTH) await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+if (process.env.EVAL_CODEX_AUTH && !controlledRecovery) await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
   const {readCodexCliCredentialsCached,upsertAuthProfile}=await import('/app/dist/plugin-sdk/provider-auth.js');
   const credential=readCodexCliCredentialsCached({codexHome:process.env.EVAL_CODEX_AUTH,allowKeychainPrompt:false});
   if(!credential)throw new Error('Authorized test OAuth credentials unavailable');
@@ -290,10 +302,13 @@ async function sayBurst(who, chatUid, bodies) {
   turns.push(turn); await save(); return turn;
 }
 async function collectUsage() {
-  if (!process.env.EVAL_CODEX_AUTH) return;
-  const db = new DatabaseSync('/var/lib/plow/agents/main/agent/openclaw-agent.sqlite', { readOnly: true });
+  if (!process.env.EVAL_CODEX_AUTH || controlledRecovery) return;
+  const database = '/var/lib/plow/agents/main/agent/openclaw-agent.sqlite';
+  // A silent attention decision never opens a gateway conversation database.
+  if (!existsSync(database)) return;
+  const db = new DatabaseSync(database, { readOnly: true });
   try {
-    modelRequests.length = 0;
+    for (let i = modelRequests.length - 1; i >= 0; i--) if (modelRequests[i].usage) modelRequests.splice(i, 1);
     for (const row of db.prepare('SELECT event_json,event_zstd FROM transcript_events ORDER BY created_at').all()) {
       const event = JSON.parse(row.event_json ?? zstdDecompressSync(row.event_zstd).toString('utf8'));
       const message = event.message;
