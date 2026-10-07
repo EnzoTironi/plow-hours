@@ -47,6 +47,9 @@ with NO_REPLY in a source group, or a brief acknowledgement in a source DM.
 If the send already answered the current chat, finish with NO_REPLY there too.
 Do not repeat the sent content. Unknown delivery never
 justifies a second send. A receipt confirms acceptance, not Apple delivery.
+Looking up a group does not change the source of the current request or authorize
+forwarding it. Questions about where a group is or whether someone received a
+message get a normal answer in the current conversation, without another send.
 
 Owner reports, dashboard links, financial administration and correction results
 are private. For such a group request, execute it and write the actual answer normally.
