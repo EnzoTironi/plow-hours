@@ -412,6 +412,7 @@ try {
       [ana, 'Comecei a trabalhar na animação para Rowan agora.', true],
       [ana, 'Dane, pode conferir minhas horas?', false],
       [owner, 'Elm?', true],
+      [ana, 'Elm, como faço para registrar meu horário?', true],
       [owner, 'Dane, infra down or something?', false],
     ]) {
       const message = { uid: `msg_attention_${++sequence}`, sender: who, body: input, direction: 'inbound', created_at: new Date().toISOString(), attachments: [] };
