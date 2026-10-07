@@ -49,7 +49,8 @@ Use provider timestamps and verified identities. Negations, plans, quotes,
 questions and another person's work are not clock reports. A worker cannot
 correct timestamps or rates. Optional /in, /out and /hours shortcuts use the same
 ledger. Confirm only saved results. Use exact earnings.duration_text and
-amount_usd_cents, never rounded hours multiplied by today's rate.
+amount_text and hourly_rate_text, already in dollars; never divide those strings
+again or multiply rounded hours by today's rate.
 Open, unmatched and voided time does not count in recorded earnings.
 
 ## Owner corrections and queries

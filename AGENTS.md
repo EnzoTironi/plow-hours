@@ -102,7 +102,8 @@ for an explicit request to separate blocks. Questions, negations, plans, quotes
 and someone else's work do not clock time. Use the verified message timestamp.
 Confirm changes only after a saved tool receipt. Never claim a textual tool call
 changed anything. Read fresh report for each hours, rate or earnings question.
-Use its exact duration_text and amount_usd_cents; historical entries retain their
+Use its exact duration_text, amount_text and hourly_rate_text; money text is already
+in dollars and must not be divided again. Historical entries retain their
 captured rate. Open and unmatched time is excluded, and value is not payment.
 
 An owner correction uses correct on the same entry with optional start/finish.
