@@ -88,6 +88,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
       const request = await bodyOf(req);
       const observation = { ...activeTurn, model: request.model, tool_names: (request.tools ?? []).map(t => t.function?.name) };
+      if (request.response_format?.json_schema?.name === 'ours_attention') observation.attention_context = JSON.parse(request.messages.at(-1).content);
       modelRequests.push(observation);
       if (controlledRecovery) {
         if (!modelRecovered && !toolProtocol && !clockConfirmation) return json({ error: { message: 'Controlled provider outage' } }, 503);
