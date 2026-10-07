@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
-import entry from "../plugin/index.ts";
+import entry from "./ours-entry.ts";
 import { hoursLedger } from "../plugin/hours.ts";
 import { clockHours, hoursGroup } from "../plugin/hours-channel.ts";
 import { websocketFixture } from "./ws-fixture.ts";

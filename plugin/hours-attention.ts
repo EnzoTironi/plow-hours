@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { request, type Account, type Chat, type Message } from "./transport.ts";
+import { request, type Account, type Chat, type Message, type Page } from "./transport.ts";
 
 const decision = z.object({ participate: z.boolean() }).strict();
 const completion = z.object({ choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1) });
@@ -22,12 +22,14 @@ export async function shouldParticipate(cfg: OpenClawConfig, account: Account, c
     : { name: value.line.display_name, role: value.relationship === "self" ? "agent" : "other-agent" };
   const reply = (value: Message) => ({ sender: person(value.sender), body: value.body,
     ...(value.reply_to ? { replying_to: { sender: person(value.reply_to.sender), body: value.reply_to.body } } : {}) });
+  const recent = history.length ? history : (await request<Page<Message>>(account,
+    `/chats/${encodeURIComponent(chat.uid)}/messages?limit=6&starting_after=${encodeURIComponent(message.uid)}`, undefined, signal)).data.reverse();
   const response = await request<unknown>(account, "/chat/completions", {
     model: model.replace(/^plow\//, ""), stream: false, max_tokens: 80,
     response_format: { type: "json_schema", json_schema: { name: "ours_attention", strict: true, schema: z.toJSONSchema(decision) } },
     messages: [{ role: "system", content: policy }, { role: "user", content: JSON.stringify({
       agent_names: ["Ours", cfg.agents?.entries?.main?.identity?.name].filter(Boolean),
-      participants: chat.participants.map(person), recent: history.slice(-6).map(reply), current: reply(message),
+      participants: chat.participants.map(person), recent: recent.slice(-6).map(reply), current: reply(message),
     }) }],
   }, AbortSignal.any([signal, AbortSignal.timeout(30_000)]));
   return decision.parse(JSON.parse(completion.parse(response).choices[0].message.content)).participate;

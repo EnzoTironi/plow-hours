@@ -82,7 +82,7 @@ entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(a
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
-entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { claimOwnerNotice, clearOwnerAnswer, ownerAnswerIsPrivate, clockHours, findContractorGroups, contractorGroupContext, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, registerHours, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { registerHoursWeb } from "./hours-web.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
+entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { claimOwnerNotice, clearOwnerAnswer, ownerAnswerIsPrivate, clockHours, findContractorGroups, contractorGroupContext, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, authorizeHoursOwner, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
 entry='import { shouldParticipate } from "./hours-attention.ts";\nimport { assertHumanReply, isAttentionDecisionText, isInternalReplyText } from "./hours-reply.ts";\n'+entry;
 entry=replaceOnce(entry,'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {',
   'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {\n  assertHumanReply(text);');
@@ -153,19 +153,8 @@ entry=replaceOnce(entry,'payload: { first_contact: firstContact, trusted: chat.t
 const prompt='      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),';
 entry=replaceOnce(entry,'      turnAdoptionLifecycle: ingress,','      turnAdoptionLifecycle: ingress,\n      ...(hoursEnabled() && account.accountId === "chat" ? { disableBlockStreaming: true } : {}),\n      ...(ownerGroup || hoursRestricted && kind === "group" ? { suppressTyping: true } : {}),');
 entry=replaceOnce(entry,'"requesterSenderId" | "senderIsOwner">;', '"requesterSenderId" | "senderIsOwner" | "toolBindings">;');
-const ownerSessionGuard='  if (context.sessionKey !== "agent:main:main" ||';
-entry=replaceOnce(entry,ownerSessionGuard,`  const source = context.toolBindings?.plowHoursOwner;
-  const groupSource = clockSourceSchema.safeParse(source);
-  const groupSession = groupSource.success && groupSource.data.line_uid === account.lineUid && context.sessionKey === "agent:main:plow:owner-group:" + groupSource.data.chat_uid;
-  if (groupSession && context.messageChannel === "plow" && context.senderIsOwner && context.agentAccountId === "chat" && chatUid && context.requesterSenderId) {
-    const group = await request<Chat>(account, \`/chats/\${encodeURIComponent(groupSource.data.chat_uid)}\`);
-    const sender = group.participants.find(p => p.type === "member" && p.role === "owner" && normalizeHandle(p.provider_key) === normalizeHandle(groupSource.data.handle));
-    if (!sender) throw new Error("The group owner is unavailable.");
-    const verified = await ownerPrivateConversation(account, group, { sender });
-    if (group.uid !== chatUid) throw new Error("The owner group source changed.");
-    return { chat: verified.chat };
-  }
-  if (context.sessionKey !== "agent:main:main" && !groupSession ||`);
+entry=replaceOnce(entry,'async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat: Chat }> {',
+  'async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat: Chat }> {\n  if (hoursEnabled()) return authorizeHoursOwner(account, context);');
 entry=replaceOnce(entry,'  const dispatched = runtime.channel.inbound.dispatch({',`  const phoneReplyTarget = async () => {
     if (ownerGroup && ownerAnswerIsPrivate(ctxPayload.GatewayRunToolBindings?.plowHoursOwner)) {
       const verified = await ownerPrivateConversation(account, ownerGroup, message);
@@ -251,16 +240,6 @@ entry=replaceOnce(entry,'  log(`${outcome} chat=${chat.uid} message=${message.ui
   }
   log(\`\${outcome} chat=\${chat.uid} message=\${message.uid}\`);`);
 entry=replaceOnce(entry,'...(!email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),','...(hoursRestricted ? { disableTools: !hoursContractor } : !email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),');
-entry=replaceOnce(entry,'if (api.registrationMode === "full") api.logger.info("plow channel registered");',`if (api.registrationMode === "full") {
-      registerHoursWeb(api);
-      api.logger.info("plow channel registered");
-    }`);
-entry=replaceOnce(entry,'  registerCapabilities(api) {',`  registerCapabilities(api) {
-    registerHours(api, async context => {
-      if (!context.config) throw new Error("Plow configuration is unavailable.");
-      const account = plugin.config.resolveAccount(context.config, "chat");
-      return { account, ...await ownerDmTurn(account, context) };
-    });`);
 entry += `
 async function sendOwnerNotice(cfg: Parameters<typeof sessionRoute>[0], account: Account, source: z.infer<typeof clockSourceSchema>, notice: string, log: (message: string) => void) {
   if (!notice) return;
@@ -327,66 +306,6 @@ transport=replaceOnce(transport,'    await submitted;', `    if (hoursEnabled() 
     else await submitted;`);
 await writeFile(plugin+'/transport.ts',transport);
 
-const manifest=JSON.parse(await readFile(plugin+'/openclaw.plugin.json','utf8'));
-manifest.contracts.tools.push('plow_hours','plow_hours_self');
-await writeFile(plugin+'/openclaw.plugin.json',JSON.stringify(manifest,null,2)+'\n');
-let config=await readFile('/opt/plow/boot/config.ts','utf8');
-config='import { HoursLedger } from "../plugin/hours.ts";\n'+config;
-config=replaceOnce(config,'entries: { plow: { enabled: true } }', 'entries: { plow: { enabled: true } }');
-config=replaceOnce(config,'workspace: "/var/lib/plow/workspace", skipBootstrap: true,', 'workspace: "/var/lib/plow/workspace", skipBootstrap: true, bootstrapMaxChars: 32000,');
-config=replaceOnce(config,'  ["plow-provider", ["models", "providers", "plow"]],', '  ["plow-provider", ["models", "providers", "plow"]],\n  ["ours-prompt-limit", ["agents", "defaults", "bootstrapMaxChars"]],');
-config=replaceOnce(config,'export type Identity = {','export type Identity = {\n  owner_uid?: string;');
-config=replaceOnce(config,'  const name = identity.agent?.name;', `  const ownerUids = identity.owner_uid ? [identity.owner_uid] : [];
-  if (process.env.PLOW_HOURS === "1") {
-    if (!ownerUids[0]?.trim()) throw new Error("Ours needs an authenticated account owner identity.");
-    const ledger = new HoursLedger(join(process.env.OPENCLAW_STATE_DIR ?? "/var/lib/plow", "plow-hours"));
-    try { ledger.bindInstallation(identity.line.uid, ownerUids[0]); } finally { ledger.close(); }
-  }
-  const name = identity.agent?.name;`);
-config=replaceOnce(config,'userHeader: "x-plow-user", allowLoopback: true,','userHeader: "x-plow-user", allowLoopback: true, allowUsers: [...ownerUids, ...(process.env.PLOW_HOURS_LOCAL === "1" ? ["dev-owner"] : [])],');
-config=replaceOnce(config,'controlUi: { enabled: true,','controlUi: { basePath: "/openclaw", enabled: true,');
-config=replaceOnce(config,'  const name = identity.agent?.name;','  const name = process.env.AGENT_NAME ?? identity.agent?.name;');
-config=replaceOnce(config,'"plow_send_email"]','"plow_send_email", ...(process.env.PLOW_HOURS === "1" ? ["plow_hours", "plow_hours_self"] : [])]');
-config=replaceOnce(config,'"automations", "read", "write", "edit", "exec",', '"automations",');
-config=replaceOnce(config,'deny: ["ask_user"]', 'deny: ["ask_user", "exec", "read", "write", "edit", "apply_patch"]');
-config=replaceOnce(config,'    channels: { plow: {','    surfaces: { plow: { silentReply: { group: "allow" } } },\n    channels: { plow: {');
-config=replaceOnce(config,'  ["plow-channel", ["channels", "plow"]],','  ["plow-channel", ["channels", "plow"]],\n  ["plow-silent-reply", ["surfaces", "plow", "silentReply"]],');
-config=replaceOnce(config,
-  '{ id: "z-ai/glm-5.2", name: "GLM 5.2", input: ["text"], contextWindow: 1048576, cost: { input: 0.5544, output: 1.7424 } },',
-  '{ id: "openai/gpt-6-sol", name: "GPT 6 Sol", reasoning: true, input: ["text", "image"], contextWindow: 1050000, maxTokens: 128000 },');
-config=replaceOnce(config,'workspace: "/var/lib/plow/workspace", skipBootstrap: true,',
-  'workspace: "/var/lib/plow/workspace", skipBootstrap: true, userTimezone: "America/Sao_Paulo",');
-config=replaceOnce(config,'primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"]',
-  'primary: "plow/anthropic/claude-sonnet-5", fallbacks: ["plow/openai/gpt-6-sol"]');
-config=replaceOnce(config,'  for (const [file, path] of ownedPaths) {',`  for (const path of [["agents", "defaults", "model"], ["agents", "entries", "main", "model"]]) {
-    const selected = getPath(owner, path);
-    const previousDefaults = ["plow/z-ai/glm-5.2", "plow/z-ai/glm-5.3-flash"];
-    if (typeof selected === "string" && previousDefaults.includes(selected)) {
-      const parent = parentAt(owner, path, false);
-      if (parent) parent.model = "plow/anthropic/claude-sonnet-5";
-    } else if (isObject(selected) && typeof selected.primary === "string" && previousDefaults.includes(selected.primary)) {
-      selected.primary = "plow/anthropic/claude-sonnet-5";
-      if (Array.isArray(selected.fallbacks) && selected.fallbacks.length === 1 && selected.fallbacks[0] === selected.primary) {
-        selected.fallbacks = ["plow/openai/gpt-6-sol"];
-      }
-    }
-  }
-
-  for (const [file, path] of ownedPaths) {`);
-await writeFile('/opt/plow/boot/config.ts',config);
-let identity=await readFile('/opt/plow/boot/identity.ts','utf8');
-identity=replaceOnce(identity,'      if (!identity.line.uid)',`      if (process.env.PLOW_HOURS === "1") {
-        const owner = await fetch(\`\${base}/v1/auth/owner-uid\`, {
-          headers: { Authorization: \`Bearer \${token}\` }, signal: AbortSignal.timeout(10_000),
-        });
-        if (!owner.ok) throw new Error(\`Owner identity request refused: HTTP \${owner.status}\`);
-        const value: unknown = await owner.json();
-        if (!value || typeof value !== "object" || !("owner_uid" in value)
-          || typeof value.owner_uid !== "string" || !value.owner_uid.trim()) throw new Error("Owner identity is missing owner_uid");
-        identity.owner_uid = value.owner_uid;
-      }
-      if (!identity.line.uid)`);
-await writeFile('/opt/plow/boot/identity.ts',identity);
 let bootPrompt=await readFile('/opt/plow/boot/prompt.ts','utf8');
 bootPrompt=replaceOnce(bootPrompt,[
   '  const dashboard = webUrl',
@@ -395,9 +314,6 @@ bootPrompt=replaceOnce(bootPrompt,[
   '  const rendered = `${prompt}\\nThread trust: ${instruction}\\n${dashboard}`;',
 ].join('\n'),'  const rendered = `${prompt}\\nThread trust: ${instruction}\\n`;');
 await writeFile('/opt/plow/boot/prompt.ts',bootPrompt);
-let probeFixture=await readFile('/opt/plow/boot/probe-fixture.ts','utf8');
-probeFixture=replaceOnce(probeFixture,'export const probeIdentity: Identity = {','export const probeIdentity: Identity = {\n  owner_uid: "mem_probe",');
-await writeFile('/opt/plow/boot/probe-fixture.ts',probeFixture);
 
 for (const [source,destination] of [
   [plugin+'/index.ts',plugin+'/dist/index.js'],
@@ -406,11 +322,13 @@ for (const [source,destination] of [
   [plugin+'/hours-billing.ts',plugin+'/dist/hours-billing.js'],
   [plugin+'/hours-period.ts',plugin+'/dist/hours-period.js'],
   [plugin+'/hours-channel.ts',plugin+'/dist/hours-channel.js'],
+  [plugin+'/ours.ts',plugin+'/dist/ours.js'],
   [plugin+'/hours-reply.ts',plugin+'/dist/hours-reply.js'],
   [plugin+'/hours-attention.ts',plugin+'/dist/hours-attention.js'],
   [plugin+'/hours-notifications.ts',plugin+'/dist/hours-notifications.js'],
   [plugin+'/hours-web.ts',plugin+'/dist/hours-web.js'],
   ['/opt/plow/boot/config.ts','/opt/plow/boot/config.js'],
+  ['/opt/plow/boot/ours-config.ts','/opt/plow/boot/ours-config.js'],
   ['/opt/plow/boot/identity.ts','/opt/plow/boot/identity.js'],
   ['/opt/plow/boot/prompt.ts','/opt/plow/boot/prompt.js'],
   ['/opt/plow/boot/probe-fixture.ts','/opt/plow/boot/probe-fixture.js'],
@@ -418,6 +336,5 @@ for (const [source,destination] of [
   const text=await readFile(source,'utf8');
   await writeFile(destination,stripTypeScriptTypes(text.replaceAll(/(from "\.\/[^"\n]+)\.ts"/g,'$1.js"')));
 }
-await cp(plugin+'/hours-web',plugin+'/dist/hours-web',{recursive:true});
 await writeFile('/opt/plow/probe','#!/usr/bin/env node\nimport "./hours-source/probe.mjs";\n',{mode:0o755});
 await writeFile('/opt/plow/hours-backup','#!/usr/bin/env node\nimport { runBackupCli } from "./hours-source/backup.mjs";\nawait runBackupCli(process.argv.slice(2));\n',{mode:0o755});

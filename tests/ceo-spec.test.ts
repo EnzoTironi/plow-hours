@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { HoursLedger } from "../plugin/hours.ts";
-import { renderConfig, syncConfig } from "../boot/config.ts";
-import { probeIdentity } from "../boot/probe-fixture.ts";
-import { identityFromApi } from "../boot/identity.ts";
+import { renderConfig, syncConfig } from "../boot/ours-config.ts";
+import { probeIdentity as baseProbeIdentity } from "../boot/probe-fixture.ts";
+import { identityFromApi } from "../boot/ours-config.ts";
+
+const probeIdentity = { ...baseProbeIdentity, owner_uid: "mem_probe" };
 
 test("CEO spec: the installed OpenClaw variant exposes Ours, its owner tool and its operating skill", () => {
   const cfg = renderConfig(probeIdentity, "http://127.0.0.1:1");

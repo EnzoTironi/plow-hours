@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { z } from "zod";
-import { renderConfig, syncConfig } from "../boot/config.ts";
+import { renderConfig, syncConfig } from "../boot/ours-config.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 const primary = "plow/anthropic/claude-sonnet-5";
@@ -67,4 +67,17 @@ test("the installed personality and hours policy fit inside the bootstrap budget
   const prompt = await readFile("/opt/plow/prompt/AGENTS.md", "utf8");
   assert.ok(render().agents.defaults.bootstrapMaxChars >= prompt.length,
     "The model must receive the complete personality and correction policy.");
+});
+
+test("an existing installation enables the separate hours plugin and keeps unrelated plugin settings", async t => {
+  await websocketFixture(t);
+  const root = process.env.OPENCLAW_STATE_DIR;
+  assert.ok(root);
+  const path = join(root, "openclaw.json"), includes = join(root, "includes");
+  await writeFile(path, JSON.stringify({ plugins: { entries: { unrelated: { enabled: false } } } }));
+  await syncConfig(render(), path, includes);
+  const saved = JSON.parse(await readFile(path, "utf8"));
+  assert.deepEqual(saved.plugins.entries.ours, { enabled: true });
+  assert.deepEqual(saved.plugins.entries.unrelated, { enabled: false });
+  assert.ok(JSON.parse(await readFile(join(includes, "plugin-load.json5"), "utf8")).paths.includes("/opt/ours/plugin"));
 });

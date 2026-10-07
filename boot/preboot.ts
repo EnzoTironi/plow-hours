@@ -13,8 +13,8 @@ const message = (error: unknown) => error instanceof Error ? error.message : Str
 try {
   const { installBootLog } = await load("/opt/plow/boot/log.js");
   const { startAgentIndex } = await load("/opt/plow/boot/agent-index.js");
-  const { renderConfig, syncConfig } = await load("/opt/plow/boot/config.js");
-  const { identityFromApi } = await load("/opt/plow/boot/identity.js");
+  const { renderConfig, syncConfig } = await load("/opt/plow/boot/ours-config.js");
+  const { identityFromApi } = await load("/opt/plow/boot/ours-config.js");
   const { renderPrompt } = await load("/opt/plow/boot/prompt.js");
   const { startGateway } = await load("/opt/plow/boot/process.js");
 

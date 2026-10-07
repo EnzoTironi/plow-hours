@@ -106,6 +106,28 @@ export async function ownerPrivateConversation(account: Account, group: Chat, me
   return { chat, sender: owner };
 }
 
+export async function authorizeHoursOwner(account: Account, context: OpenClawPluginToolContext) {
+  const uid = (context.nativeChannelId ?? context.deliveryContext?.to)?.replace(/^plow:/i, "");
+  if (account.accountId !== "chat" || context.messageChannel !== "plow" || !context.senderIsOwner
+    || context.agentAccountId !== "chat" || !uid || !context.requesterSenderId) {
+    throw new Error("This action requires the verified owner's main Plow DM or group.");
+  }
+  const source = clockSourceSchema.safeParse(context.toolBindings?.plowHoursOwner);
+  if (source.success && context.sessionKey === "agent:main:plow:owner-group:" + source.data.chat_uid) {
+    if (source.data.line_uid !== account.lineUid || source.data.chat_uid !== uid) throw new Error("The owner group source changed.");
+    const group = await request<Chat>(account, `/chats/${encodeURIComponent(uid)}`);
+    const sender = group.participants.find(p => p.type === "member" && p.role === "owner"
+      && normalizeHandle(p.provider_key) === normalizeHandle(source.data.handle));
+    if (!sender) throw new Error("The group owner is unavailable.");
+    return { chat: (await ownerPrivateConversation(account, group, { sender })).chat };
+  }
+  if (context.sessionKey !== "agent:main:main") throw new Error("This action requires the owner's main Plow DM.");
+  const chat = await request<Chat>(account, `/chats/${encodeURIComponent(uid)}`);
+  if (findOwnerChat(account, [chat]) !== chat) throw new Error("This action requires the owner's main Plow DM.");
+  hoursLedger().assertInstallationLine(account.lineUid);
+  return { chat };
+}
+
 export function unavailableGroupPrompt(chat: Chat, group: boolean) {
   const changed = group && hoursLedger().groupContractor(chat.uid);
   return `${group ? groupRequestPrompt + "\n" : ""}You are Ours. Explain why this requested action is unavailable. You cannot access contractor records or owner data in this conversation.

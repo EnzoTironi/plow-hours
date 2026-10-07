@@ -4,7 +4,7 @@ import { z } from "zod";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import type { ReplyPayload, ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
-import entry from "../plugin/index.ts";
+import entry from "./ours-entry.ts";
 import { hoursLedger } from "../plugin/hours.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 

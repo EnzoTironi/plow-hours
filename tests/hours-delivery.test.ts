@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { z } from "zod";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
-import entry from "../plugin/index.ts";
+import entry from "./ours-entry.ts";
 import { hoursLedger } from "../plugin/hours.ts";
 import { clearOwnerAnswer, ownerAnswerIsPrivate, findContractorGroups, ownerPrivateConversation } from "../plugin/hours-channel.ts";
 import { DeliveryUnknownError, HttpError } from "../plugin/transport.ts";

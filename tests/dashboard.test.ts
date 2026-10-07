@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import entry from "../plugin/index.ts";
+import entry from "./ours-entry.ts";
 import { renderPrompt } from "../boot/prompt.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 

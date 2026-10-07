@@ -11,7 +11,13 @@ test("group attention uses source participants and recent replies without tools 
   const chat = { uid: "group", status: "active" as const, participants: [owner, worker, agent] };
   const message = { uid: "current", sender: worker, direction: "inbound" as const, body: "Started working", created_at: "2026-10-06T12:00:00Z", attachments: [], reply_to: { uid: "question", sender: agent, body: "What are you working on?" } };
   let result = '{"participate":true}';
+  let historyReads = 0;
   t.mock.method(globalThis, "fetch", async (url: string, options?: RequestInit) => {
+    if (new URL(url).pathname === "/v1/chats/group/messages") {
+      assert.equal(new URL(url).searchParams.get("starting_after"), message.uid);
+      historyReads++;
+      return Response.json({ data: Array(6).fill(message), has_more: false });
+    }
     assert.equal(new URL(url).pathname, "/v1/chat/completions");
     const request = JSON.parse(String(options?.body));
     assert.equal(request.model, "anthropic/claude-sonnet-5");
@@ -24,10 +30,13 @@ test("group attention uses source participants and recent replies without tools 
     assert.deepEqual(context.participants.map((p: { name: string }) => p.name), ["Dane", "Alex", "Elm"]);
     return Response.json({ choices: [{ message: { content: result } }] });
   });
-  const decide = () => shouldParticipate({}, { accountId: "chat", apiBase: "http://fixture", lineUid: "line" }, chat, message, Array(10).fill(message), new AbortController().signal);
+  const decide = (history = Array(10).fill(message)) => shouldParticipate({}, { accountId: "chat", apiBase: "http://fixture", lineUid: "line" }, chat, message, history, new AbortController().signal);
   assert.equal(await decide(), true);
   result = '{"participate":false}';
   assert.equal(await decide(), false);
+  assert.equal(historyReads, 0);
+  assert.equal(await decide([]), false);
+  assert.equal(historyReads, 1, "Contextualized native turns still read recent history from their own group");
   for (const malformed of ['{"participate":"true"}', '{"participate":true,"send":"other-chat"}', 'I should reply']) {
     result = malformed;
     await assert.rejects(decide);
