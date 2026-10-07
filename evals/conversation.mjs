@@ -124,7 +124,7 @@ const server = createServer(async (req, res) => {
         const auth = JSON.parse(await readFile(`${process.env.EVAL_CODEX_AUTH}/auth.json`, 'utf8'));
         assert.ok(auth.tokens?.access_token && auth.tokens?.account_id, 'Authorized Codex OAuth credentials unavailable');
         const client = new OpenAI({ apiKey: auth.tokens.access_token, baseURL: 'https://chatgpt.com/backend-api/codex',
-          defaultHeaders: { 'ChatGPT-Account-Id': auth.tokens.account_id }, maxRetries: 0, timeout: request.stream ? 180_000 : 30_000 });
+          defaultHeaders: { 'ChatGPT-Account-Id': auth.tokens.account_id }, timeout: request.stream ? 180_000 : 30_000 });
         const abort = new AbortController();
         res.once('close', () => abort.abort());
         const instructions = request.messages.filter(m => ['system', 'developer'].includes(m.role)).map(m => m.content).join('\n');
