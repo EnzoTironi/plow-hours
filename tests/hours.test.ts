@@ -193,6 +193,17 @@ test("only a registered sender in their registered thread can clock work, includ
   assert.equal(f.snapshot().open_entry?.details, "outra");
 });
 
+test("repeating the same work with another generated ID reuses its saved assignment", t => {
+  const f = fixture(t);
+  const work = { action: "demand", contractor_id: "ana", project: "Website", summary: "Build the landing page", references: "github.com/team/site/issues/42" };
+  assert.deepEqual(f.ledger.manage({ ...work, id: "another-generated-id" }, "repeat-work"), { demand_id: "landing", registered: true, reused: true });
+  f.restart();
+  assert.deepEqual(f.ledger.manage({ ...work, id: "retry-after-restart" }, "repeat-after-restart"), { demand_id: "landing", registered: true, reused: true });
+  assert.equal(f.snapshot().demands.length, 1);
+  f.ledger.manage({ ...work, id: "different-reference", references: "github.com/team/site/issues/43" }, "distinct-work");
+  assert.equal(f.snapshot().demands.length, 2);
+});
+
 test("each contractor can use the same demand id and cannot access another contractor's session", t => {
   const f = fixture(t);
   f.ledger.manage({ ...f.contractor, id: "bea", name: "Bea", handle: "+15550000003", chat_uid: "cht_bea" }, "bea");

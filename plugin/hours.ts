@@ -734,6 +734,9 @@ export class HoursLedger {
             if (existing.project === input.project && existing.summary === input.summary && existing.references === input.references) return { demand_id: input.id, registered: true };
             throw new Error("Demand already exists. Register a new demand to preserve past attribution.");
           }
+          const matching = this.db.prepare('SELECT id FROM demands WHERE contractor_id = ? AND project = ? AND summary = ? AND "references" = ? AND active = 1 ORDER BY id LIMIT 1')
+            .get(input.contractor_id, input.project, input.summary, input.references);
+          if (matching) return { demand_id: z.object({ id }).parse(matching).id, registered: true, reused: true };
           this.db.prepare('INSERT INTO demands(id, contractor_id, project, summary, "references") VALUES (?, ?, ?, ?, ?)')
             .run(input.id, input.contractor_id, input.project, input.summary, input.references);
           this.bump(input.contractor_id);
