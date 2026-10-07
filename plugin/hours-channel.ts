@@ -154,6 +154,7 @@ For every hours, rate or earnings question, call report for this inbound message
 old result. Use earnings.duration_text and amount_usd_cents. Current rates can differ from historical
 entry rates. Open, pending and voided time is excluded. Recorded value is not approved or paid.
 Payment details can be saved before a billing request. Use supplied values and preserve leading zeros.
+If the worker asks for another worker’s records or the owner dashboard, explain briefly in this group that you can only show their own hours; do not stay silent.
 An expanded or changed group grants no access. Never reveal owner or other workers' information.`;
 }
 

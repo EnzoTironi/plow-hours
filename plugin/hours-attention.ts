@@ -14,6 +14,7 @@ A question or instruction addressed to another participant is theirs to answer, 
 An owner's question about someone's recorded hours is for this agent unless it explicitly addresses another human. A person's name as the subject does not address them: "How many hours has Ana worked today?" is true; "Ana, how many hours did you work?" is false.
 Mentioning a person as the subject or recipient is different from addressing them. An owner asking you to explain hours to a worker is asking the agent: "Can you explain to Ana how she can record work here?", "Consegue explicar pra ela como vc funciona ours?" and "Send me the dashboard" are true, without requiring a bot name. "Ana, can you log your hours?" is addressed to Ana and is false.
 Greetings, thanks, acknowledgements, bare links, screenshots, human conversation, infrastructure and bug discussions are false without a new request for the hours agent.
+A request for another worker’s hours or the owner dashboard is still an hours request: return true so the agent can explain the access limit. Permission is checked by the tools, not this decision.
 Access problems do not make unrelated conversation a request. Decide only whether to participate, never perform an action or discuss your decision.`;
 
 export async function shouldParticipate(cfg: OpenClawConfig, account: Account, chat: Chat, message: Message, history: Message[], signal: AbortSignal): Promise<boolean> {
