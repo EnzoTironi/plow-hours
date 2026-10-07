@@ -1449,7 +1449,11 @@ try {
     check('Owner report can access both isolated contractors', () => { const r = ledger.report(); assert.equal(r.find(r => r.contractor.id === 'ana').total_hours, 2); assert.equal(r.find(r => r.contractor.id === 'ben').total_hours, 0.75); assert.ok([...toolCalls.values()].some(t => (t.name === 'plow_hours' && t.args.action === 'report'))); });
     await say(owner, home.uid, 'A Ana confirmou que o último bloco das 10:45 às 11:30 de 02/10/2026 foi na landing, não no branding. Corrija só a demanda desse bloco para landing e preserve horários e tarifa. Motivo: ela confirmou a classificação errada.');
     check('Natural owner correction changes task attribution without changing time or rate', () => { const r = ledger.report('ana')[0]; assert.equal(r.review_needed.length, 0); assert.equal(r.entries.at(-1).demand_id, 'landing'); assert.equal(r.total_hours, 2); assert.equal(r.entries.at(-1).rate_cents, 3000); });
-    await say(owner, home.uid, 'Solicite à Ana a nota fiscal e chave Pix e ao Ben a invoice e os dados de ACH. Registre as pendências para o período 2026-10-02 a 2026-10-02. Também preciso de W-9 do Ben. Não faça pagamentos.');
+    const paperwork = await say(owner, home.uid, 'Solicite à Ana a nota fiscal e chave Pix e ao Ben a invoice e os dados de ACH. Registre as pendências para o período 2026-10-02 a 2026-10-02. Também preciso de W-9 do Ben. Não faça pagamentos.');
+    check('Requested invoice paperwork reaches each intended worker group, not just the owner DM', () => {
+      assert.ok(paperwork.responses.some(r => r.chat_uid === 'cht_eval_ana' && /nota fiscal|invoice/i.test(r.body)));
+      assert.ok(paperwork.responses.some(r => r.chat_uid === 'cht_eval_ben' && /invoice/i.test(r.body)));
+    });
     await say(ana, 'cht_eval_ana', 'Minha nota está em https://invoices.example.test/ana/nf-42.pdf, número NF-42, valor USD 60 para 2026-10-02. Titular Ana Silva. Instruções completas do Pix compartilhadas com o dono em https://private.example.test/ana/pix.pdf. Pode guardar para o Dane.');
     await say(ben, 'cht_eval_ben', 'Invoice https://invoices.example.test/ben/invoice-99.pdf, number INV-99, USD 37.50 for 2026-10-02. ACH beneficiary Ben Smith, Example Bank, checking, complete private ACH instructions at https://private.example.test/ben/ach.pdf, last four digits 7890. W-9 is at https://private.example.test/ben/w9.pdf. Please save these for Dane.');
     await say(owner, home.uid, 'Quais documentos e dados de pagamento já recebemos de cada um? Consulte o registro financeiro.');
