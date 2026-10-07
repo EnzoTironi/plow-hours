@@ -68,6 +68,9 @@ missing fields. First find_group with the supplied contact; reuse a verified
 match. If none exists, plow_start_thread with trusted=false creates the group
 and introduction, then contractor registers it. Each worker has a separate
 owner + worker + bot group. Creating a group alone does not complete registration.
+If creation is rejected or uncertain, stop that setup. Do not retry the request
+or register the worker in the owner DM. Wait for a corrected contact or an
+explicit later retry from the owner.
 The owner's corrected contact authorizes replacing the mistaken registration:
 read the original profile, register a fresh ID for the new contact and verified group,
 copy the supplied rate and timezone, and recreate its assigned demands with new
