@@ -223,6 +223,11 @@ export class HoursLedger {
         this.db.exec("ALTER TABLE owner_notices ADD COLUMN body TEXT NOT NULL DEFAULT ''");
       this.db.exec("DROP INDEX IF EXISTS one_open_entry; CREATE UNIQUE INDEX one_open_entry ON entries(contractor_id) WHERE end_ms IS NULL AND voided=0;");
       this.db.exec("UPDATE clock_inbox SET source_json=json_set(source_json, '$.body', '') WHERE complete=1;");
+      // Old work-note receipts must not consume a start/stop from the same message.
+      this.db.exec(`UPDATE receipts SET source='note:' || source
+        WHERE EXISTS (SELECT 1 FROM audit WHERE audit.source=receipts.source AND action='note')
+        AND NOT EXISTS (SELECT 1 FROM entries WHERE start_message=receipts.source OR stop_message=receipts.source)
+        AND NOT EXISTS (SELECT 1 FROM receipts AS notes WHERE notes.source='note:' || receipts.source);`);
       for (const row of this.db.prepare("SELECT DISTINCT contractor_id FROM unmatched_stops").all()) {
         const contractor = this.contractor(z.object({ contractor_id: id }).parse(row).contractor_id);
         for (const stop of this.unmatchedStops(contractor.id)) this.queueStopNotice(contractor, stop.message);
@@ -546,8 +551,9 @@ export class HoursLedger {
     input = this.recordedClockSource(input)?.source ?? clockSourceSchema.parse(input);
     const ms = Date.parse(input.created_at);
     const source = JSON.stringify([input.line_uid, input.chat_uid, input.message_uid]);
+    const receiptSource = command.kind === "note" ? `note:${source}` : source;
     return this.transaction(() => {
-      const receipt = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(source);
+      const receipt = this.db.prepare("SELECT response FROM receipts WHERE source = ?").get(receiptSource);
       if (receipt) return receiptSchema.parse(receipt).response;
       let response: string;
       const active = this.open(contractor.id), say = RECEIPTS[contractor.language];
@@ -593,7 +599,7 @@ export class HoursLedger {
       else {
         response = this.finishClock(active, ms, command.detail, source);
       }
-      this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?)").run(source, response);
+      this.db.prepare("INSERT INTO receipts(source, response) VALUES (?, ?)").run(receiptSource, response);
       return response;
     });
   }
