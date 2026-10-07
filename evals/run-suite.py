@@ -11,7 +11,7 @@ PHASES = ['public_routing', 'open_correction', 'work_overview', 'semantic_paymen
           'alder_reconciliation', 'alder_earnings', 'alder_private_noise',
           'alder_group_delivery', 'private_notice_failure', 'tool_protocol',
           'group_failure', 'clock_confirmation', 'new_group', 'reuse_group',
-          'group_conflict', 'onboarding_delivery', 'dashboard', 'group_attention', 'full']
+          'group_conflict', 'onboarding_delivery', 'dashboard', 'group_attention', 'attention_decisions', 'full']
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--image', required=True)
 parser.add_argument('--output', type=Path, required=True)

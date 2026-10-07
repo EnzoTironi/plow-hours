@@ -336,6 +336,32 @@ function privateOwnerReply(turn, sourceGroup) {
   return privateReplies.map(r => r.body).join('\n');
 }
 try {
+  if (process.env.EVAL_PHASE === 'attention_decisions') {
+    const { shouldParticipate } = await import('/opt/plow/plugin/dist/hours-attention.js');
+    const group = { uid: 'cht_eval_attention', status: 'active', trusted: false, participants: [owner, ana, { ...self, line: { ...self.line, display_name: 'Elm' } }] };
+    chats.set(group.uid, group); messages.set(group.uid, []);
+    for (const [who, input, expected] of [
+      [owner, 'Can you explain to Ana how she can record work here?', true],
+      [owner, 'Consegue explicar pra ela como vc funciona ours?', true],
+      [owner, 'How many hours has Ana worked today?', true],
+      [owner, 'Send me the dashboard.', true],
+      [owner, 'Ana, can you log your hours here?', false],
+      [owner, 'Ana, how many hours did you work?', false],
+      [owner, 'Ana, se eu disser "Ours, parei", o que acontece?', false],
+      [ana, 'Quero registrar minah saido da trabalho', true],
+      [ana, 'Comecei a trabalhar na animação para Rowan agora.', true],
+      [ana, 'Dane, pode conferir minhas horas?', false],
+      [owner, 'Elm?', true],
+      [owner, 'Dane, infra down or something?', false],
+    ]) {
+      const message = { uid: `msg_attention_${++sequence}`, sender: who, body: input, direction: 'inbound', created_at: new Date().toISOString(), attachments: [] };
+      activeTurn = { chat_uid: group.uid, sender: who.display_name, message_uid: message.uid };
+      const actual = await shouldParticipate(config, { accountId: 'chat', apiBase, lineUid: self.line.uid }, group, message, [], new AbortController().signal);
+      turns.push({ sender: who.display_name, chat_uid: group.uid, input, expected, actual });
+      check('Real Luna attention: ' + input, () => assert.equal(actual, expected));
+      await save();
+    }
+  } else {
   gateway = newGroup
     ? spawn(process.execPath, ['/opt/plow/boot/ours-preboot.ts'], {
         env: { ...process.env, PLOW_API_BASE: apiBase, AGENT_ID: '' }, stdio: ['ignore', 'pipe', 'pipe'],
@@ -1388,6 +1414,7 @@ try {
     });
     await collectUsage();
     check('Agent conversations have successful real model usage', () => { assert.ok(modelRequests.length); assert.ok(modelRequests.every(r => r.response_status === 200)); });
+  }
   }
   }
   console.log('CONVERSATION_EVAL_OK');
