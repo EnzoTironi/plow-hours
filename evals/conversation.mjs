@@ -231,6 +231,9 @@ const config = renderConfig({ owner_uid: 'owner-account', agent: { name: agentNa
 await writeFile('/var/lib/plow/workspace/AGENTS.md', await renderPrompt(await readFile('/opt/plow/prompt/AGENTS.md', 'utf8'), null, token, 'untrusted', 'https://hours.example.test'));
 if (process.env.EVAL_CODEX_AUTH && !controlledRecovery) {
   config.agents.defaults.model = { primary: 'openai/gpt-6-luna', fallbacks: [] };
+  if (newGroup) config.agents.entries = { ...config.agents.entries, main: {
+    ...config.agents.entries?.main, model: { primary: 'openai/gpt-6-luna', fallbacks: [] },
+  } };
   config.agents.defaults.thinkingDefault = 'low';
   config.auth = { profiles: { 'openai:eval': { provider: 'openai', mode: 'oauth' } }, order: { openai: ['openai:eval'] } };
 }
@@ -333,7 +336,7 @@ function privateOwnerReply(turn, sourceGroup) {
   return privateReplies.map(r => r.body).join('\n');
 }
 try {
-  gateway = newGroup && !process.env.EVAL_CODEX_AUTH
+  gateway = newGroup
     ? spawn(process.execPath, ['/opt/plow/boot/ours-preboot.ts'], {
         env: { ...process.env, PLOW_API_BASE: apiBase, AGENT_ID: '' }, stdio: ['ignore', 'pipe', 'pipe'],
       })
@@ -343,8 +346,9 @@ try {
     if (process.env.EVAL_LOG === '1') process.stderr.write(chunk);
   });
   await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
-  if (newGroup && !process.env.EVAL_CODEX_AUTH) check('The image entrypoint resolves identity and boots the real gateway', () => {
+  if (newGroup) check('The image entrypoint resolves identity and boots the real gateway', () => {
     assert.ok(gatewayLog.includes('plow-boot: identity resolved to ' + self.line.uid));
+    if (process.env.EVAL_CODEX_AUTH) assert.ok(gatewayLog.includes('agent model: openai/gpt-6-luna'));
   });
   await delay(1500);
   ledger = new HoursLedger('/var/lib/plow/plow-hours');
