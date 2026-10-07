@@ -154,6 +154,7 @@ test("accepted group requests and saved rosters do not claim iMessage availabili
   await assert.rejects(() => ownerTools(false)("plow_start_thread").execute("member", introduction), /owner's main Plow DM/);
   const registered = z.object({ details: z.object({ registered: z.literal(true), roster_verified: z.literal(true), verification_scope: z.string() }).passthrough() })
     .parse(await tool("plow_hours").execute("register", { action: "contractor", id: "alex", name: "Alex", handle: worker.provider_key, chat_uid: group.uid, timezone: "America/New_York", rate_cents: 2000 }));
+  assert.equal(registered.details.timezone_label, "New York");
   assert.ok(!("thread_verified" in registered.details));
   assert.match(registered.details.verification_scope, /delivery have not been checked/);
 });

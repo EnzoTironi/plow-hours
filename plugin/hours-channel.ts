@@ -211,7 +211,7 @@ async function hoursDashboard(account: Account) {
   const basePath = url.pathname.replace(/\/+$/, "");
   url.pathname = `${basePath}/hours`;
   openclaw.pathname = `${basePath}/openclaw/`;
-  return { url: url.href, openclaw_url: openclaw.href, view: "hours", owner_only: true };
+  return { url: url.href, openclaw_url: openclaw.href, view: "hours", owner_only: true, read_only: true };
 }
 
 export function registerHours(api: OpenClawPluginApi, authorize: (context: OpenClawPluginToolContext) => Promise<{ account: Account; chat: Chat }>) {
@@ -261,7 +261,8 @@ export function registerHours(api: OpenClawPluginApi, authorize: (context: OpenC
       const recorded = hoursLedger().manage(input, JSON.stringify([ownerChat.uid, _id]));
       const details = input.action === "contractor"
         ? { ...z.object({ contractor_id: z.string(), registered: z.literal(true) }).parse(recorded), chat_uid: input.chat_uid,
-          delivery_status: "unconfirmed", confirmation_instruction: "Say registration is complete and delivery is unconfirmed. Never say the worker received the introduction: there is no Apple delivery receipt.",
+          timezone_label: input.timezone === "America/Sao_Paulo" ? "São Paulo" : input.timezone.slice(input.timezone.lastIndexOf("/") + 1).replaceAll("_", " "),
+          delivery_status: "unconfirmed", confirmation_instruction: "Say registration is complete and delivery is unconfirmed. Use timezone_label for the city, not the raw timezone identifier. The dashboard is a read-only owner view; workers record time by messaging their registered group. Never say the worker received the introduction: there is no Apple delivery receipt.",
           roster_verified: true, participants: "owner, registered contractor, this agent", trusted: false,
           verification_scope: "Plow participants and permissions only. iMessage availability, group visibility and message delivery have not been checked.",
           ...await hoursDashboard(account).catch(() => ({ dashboard_unavailable: true })) }
