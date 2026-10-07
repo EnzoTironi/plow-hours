@@ -119,29 +119,61 @@ const server = createServer(async (req, res) => {
         }
       }
       if (process.env.EVAL_CODEX_AUTH) {
-        assert.equal(request.stream, false, 'Only the attention classifier uses this adapter; gateway completions use native OAuth');
-        // Classify through the installed SDK without starting a second OpenClaw runtime.
+        // Preserve the gateway's completion protocol while using local Codex OAuth.
         const { default: OpenAI } = await import('/app/node_modules/openai/index.mjs');
         const auth = JSON.parse(await readFile(`${process.env.EVAL_CODEX_AUTH}/auth.json`, 'utf8'));
         assert.ok(auth.tokens?.access_token && auth.tokens?.account_id, 'Authorized Codex OAuth credentials unavailable');
         const client = new OpenAI({ apiKey: auth.tokens.access_token, baseURL: 'https://chatgpt.com/backend-api/codex',
-          defaultHeaders: { 'ChatGPT-Account-Id': auth.tokens.account_id }, maxRetries: 0, timeout: 30_000 });
+          defaultHeaders: { 'ChatGPT-Account-Id': auth.tokens.account_id }, maxRetries: 0, timeout: request.stream ? 180_000 : 30_000 });
         const abort = new AbortController();
         res.once('close', () => abort.abort());
-        let text = '';
+        const instructions = request.messages.filter(m => ['system', 'developer'].includes(m.role)).map(m => m.content).join('\n');
+        const input = request.messages.flatMap(m => {
+          if (['system', 'developer'].includes(m.role)) return [];
+          if (m.role === 'tool') return [{ type: 'function_call_output', call_id: m.tool_call_id,
+            output: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }];
+          const content = Array.isArray(m.content) ? m.content.map(p => {
+            if (p.type === 'text') return { type: 'input_text', text: p.text };
+            if (p.type === 'image_url') return { type: 'input_image', image_url: p.image_url.url };
+            throw new Error('Unsupported model input content');
+          }) : m.content;
+          return [...(content ? [{ role: m.role, content }] : []), ...(m.tool_calls ?? []).map(c => ({
+            type: 'function_call', call_id: c.id, name: c.function.name, arguments: c.function.arguments,
+          }))];
+        });
+        let text = '', calls = 0;
+        const id = 'oauth-' + randomBytes(8).toString('hex');
+        const chunk = (delta, finish_reason = null, usage) => res.write(`data: ${JSON.stringify({ id,
+          object: 'chat.completion.chunk', created: 1, model: 'openai/gpt-6-luna',
+          choices: [{ index: 0, delta, finish_reason }], ...(usage ? { usage } : {}) })}\n\n`);
         const stream = await client.responses.create({ model: 'gpt-6-luna', store: false, stream: true,
-          instructions: request.messages[0].content + '\nReturn only JSON matching {"participate":boolean}.',
-          input: [{ role: 'user', content: request.messages[1].content }], reasoning: { effort: 'low' },
+          instructions: instructions + (request.stream ? '' : '\nReturn only JSON matching {"participate":boolean}.'),
+          input, reasoning: { effort: 'low' }, ...(request.tools?.length ? { tools: request.tools.map(t => ({
+            type: 'function', name: t.function.name, description: t.function.description,
+            parameters: t.function.parameters, strict: false,
+          })) } : {}),
         }, { signal: abort.signal });
+        if (request.stream) { res.writeHead(200, { 'content-type': 'text/event-stream' }); chunk({ role: 'assistant' }); }
         for await (const event of stream) {
-          if (event.type === 'response.output_text.delta') text += event.delta;
-          if (event.type === 'response.failed') throw new Error('Local Codex classification failed');
+          if (event.type === 'response.output_text.delta') { text += event.delta; if (request.stream) chunk({ content: event.delta }); }
+          if (event.type === 'response.output_item.done' && event.item.type === 'function_call') {
+            const call = event.item;
+            toolCalls.set(call.call_id, { id: call.call_id, name: call.name, args: JSON.parse(call.arguments) });
+            if (request.stream) chunk({ tool_calls: [{ index: calls++, id: call.call_id, type: 'function',
+              function: { name: call.name, arguments: call.arguments } }] });
+          }
+          if (event.type === 'response.failed') throw new Error('Local Codex completion failed');
           if (event.type === 'response.completed') observation.oauth_usage = event.response.usage;
         }
         observation.response_status = 200;
         observation.response_text = text;
         observation.model = 'gpt-6-luna';
-        return json({ choices: [{ message: { content: text }, finish_reason: 'stop' }] });
+        if (!request.stream) return json({ choices: [{ message: { content: text }, finish_reason: 'stop' }] });
+        const usage = observation.oauth_usage;
+        chunk({}, calls ? 'tool_calls' : 'stop', usage ? { prompt_tokens: usage.input_tokens,
+          completion_tokens: usage.output_tokens, total_tokens: usage.total_tokens } : undefined);
+        res.end('data: [DONE]\n\n');
+        return;
       }
       const response = await fetch('https://api.plow.co/v1/chat/completions', {
         method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -228,7 +260,11 @@ const server = createServer(async (req, res) => {
       return json({ data: rows.slice(0, Number(url.searchParams.get('limit') ?? 50)), has_more: false });
     }
     return json({ error: 'Unsupported eval endpoint' }, 404);
-  } catch (error) { console.error('Provider error: ' + error.message); return json({ error: error.message }, 500); }
+  } catch (error) {
+    console.error('Provider error: ' + error.message);
+    if (res.headersSent) { res.destroy(); return; }
+    return json({ error: error.message }, 500);
+  }
 });
 const wss = new WebSocketServer({ server, path: '/v1/ws' });
 wss.on('connection', socket => { connected = true; sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
@@ -248,20 +284,14 @@ await mkdir('/var/lib/plow/workspace', { recursive: true });
 const config = renderConfig({ owner_uid: 'owner-account', agent: { name: agentName, web_url: 'https://hours.example.test' }, line: self.line, chats: [home] }, apiBase, 'untrusted');
 await writeFile('/var/lib/plow/workspace/AGENTS.md', await renderPrompt(await readFile('/opt/plow/prompt/AGENTS.md', 'utf8'), null, token, 'untrusted', 'https://hours.example.test'));
 if (process.env.EVAL_CODEX_AUTH && !controlledRecovery) {
-  config.agents.defaults.model = { primary: 'openai/gpt-6-luna', fallbacks: [] };
+  config.agents.defaults.model = { primary: 'plow/openai/gpt-6-luna', fallbacks: [] };
   if (newGroup) config.agents.entries = { ...config.agents.entries, main: {
-    ...config.agents.entries?.main, model: { primary: 'openai/gpt-6-luna', fallbacks: [] },
+    ...config.agents.entries?.main, model: { primary: 'plow/openai/gpt-6-luna', fallbacks: [] },
   } };
   config.agents.defaults.thinkingDefault = 'low';
-  config.auth = { profiles: { 'openai:eval': { provider: 'openai', mode: 'oauth' } }, order: { openai: ['openai:eval'] } };
+  config.models.providers.plow.models = [{ ...config.models.providers.plow.models[0], id: 'openai/gpt-6-luna', name: 'Local OAuth Luna' }];
 }
 await syncConfig(config, '/var/lib/plow/openclaw.json', '/etc/plow/openclaw');
-if (process.env.EVAL_CODEX_AUTH && !controlledRecovery) await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
-  const {readCodexCliCredentialsCached,upsertAuthProfile}=await import('/app/dist/plugin-sdk/provider-auth.js');
-  const credential=readCodexCliCredentialsCached({codexHome:process.env.EVAL_CODEX_AUTH,allowKeychainPrompt:false});
-  if(!credential)throw new Error('Authorized test OAuth credentials unavailable');
-  upsertAuthProfile({profileId:'openai:eval',credential});
-`], { env: process.env });
 if (controlledRecovery || workerClock || openCorrection || publicRouting) {
   const group = { uid: 'cht_eval_ana', status: 'active', trusted: false, participants: [owner, ana, self] };
   chats.set(group.uid, group); messages.set(group.uid, []);
@@ -398,7 +428,7 @@ try {
   await waitFor(() => gatewayLog.includes('[gateway] ready') && connected, 120_000);
   if (newGroup) check('The image entrypoint resolves identity and boots the real gateway', () => {
     assert.ok(gatewayLog.includes('plow-boot: identity resolved to ' + self.line.uid));
-    if (process.env.EVAL_CODEX_AUTH) assert.ok(gatewayLog.includes('agent model: openai/gpt-6-luna'));
+    if (process.env.EVAL_CODEX_AUTH) assert.ok(gatewayLog.includes('agent model: plow/openai/gpt-6-luna'));
   });
   await delay(1500);
   ledger = new HoursLedger('/var/lib/plow/plow-hours');
