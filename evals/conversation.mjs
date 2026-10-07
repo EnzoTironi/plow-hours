@@ -120,14 +120,28 @@ const server = createServer(async (req, res) => {
       }
       if (process.env.EVAL_CODEX_AUTH) {
         assert.equal(request.stream, false, 'Only the attention classifier uses this adapter; gateway completions use native OAuth');
-        const { runIsolatedCompletion } = await import('/app/dist/isolated-completion-IvsBFc3N.mjs');
-        const completion = await runIsolatedCompletion({ config, provider: 'openai', model: 'gpt-6-luna', agentId: 'main',
-          systemPrompt: request.messages[0].content + '\nReturn only JSON matching {"participate":boolean}.',
-          prompt: request.messages[1].content, timeoutMs: 60_000 });
+        // Classify through the installed SDK without starting a second OpenClaw runtime.
+        const { default: OpenAI } = await import('/app/node_modules/openai/index.mjs');
+        const auth = JSON.parse(await readFile(`${process.env.EVAL_CODEX_AUTH}/auth.json`, 'utf8'));
+        assert.ok(auth.tokens?.access_token && auth.tokens?.account_id, 'Authorized Codex OAuth credentials unavailable');
+        const client = new OpenAI({ apiKey: auth.tokens.access_token, baseURL: 'https://chatgpt.com/backend-api/codex',
+          defaultHeaders: { 'ChatGPT-Account-Id': auth.tokens.account_id }, maxRetries: 0, timeout: 30_000 });
+        const abort = new AbortController();
+        res.once('close', () => abort.abort());
+        let text = '';
+        const stream = await client.responses.create({ model: 'gpt-6-luna', store: false, stream: true,
+          instructions: request.messages[0].content + '\nReturn only JSON matching {"participate":boolean}.',
+          input: [{ role: 'user', content: request.messages[1].content }], reasoning: { effort: 'low' },
+        }, { signal: abort.signal });
+        for await (const event of stream) {
+          if (event.type === 'response.output_text.delta') text += event.delta;
+          if (event.type === 'response.failed') throw new Error('Local Codex classification failed');
+          if (event.type === 'response.completed') observation.oauth_usage = event.response.usage;
+        }
         observation.response_status = 200;
-        observation.response_text = completion.text;
-        observation.model = completion.model;
-        return json({ choices: [{ message: { content: completion.text }, finish_reason: 'stop' }] });
+        observation.response_text = text;
+        observation.model = 'gpt-6-luna';
+        return json({ choices: [{ message: { content: text }, finish_reason: 'stop' }] });
       }
       const response = await fetch('https://api.plow.co/v1/chat/completions', {
         method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -774,6 +788,7 @@ try {
   } else if (process.env.EVAL_PHASE === 'onboarding_delivery') {
     const ownerText = turn => turn.responses.filter(r => r.chat_uid === home.uid).map(r => r.body).join('\n').replaceAll('’', "'");
     function unconfirmed(turn) {
+      assert.doesNotMatch(ownerText(turn), /\b(?:America|Europe|Asia|Australia)\/[a-z_]+/i);
       assert.match(ownerText(turn), /unconfirmed|not actual delivery|acceptance only|(?:not|never) confirmed|isn't confirmed|did(?: not|n't) confirm|can(?:not|'t) (?:confirm|check|verify)|haven't confirmed|could(?: not|n't) confirm|no .{0,20}(?:delivery confirmation|receipt)/i);
     }
     function noFallback(turn) {
