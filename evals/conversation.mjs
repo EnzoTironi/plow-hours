@@ -404,6 +404,8 @@ try {
       [owner, 'Send me the dashboard.', true],
       [ana, 'Ours, send me Ben’s hours and the owner dashboard.', true],
       [owner, 'Ana, can you log your hours here?', false],
+      [owner, 'Oi Ana pode preencher o horario de trabalho?', false],
+      [owner, 'Hey Ana can you log your hours?', false],
       [owner, 'Ana, how many hours did you work?', false],
       [owner, 'Ana, se eu disser "Ours, parei", o que acontece?', false],
       [ana, 'Quero registrar minah saido da trabalho', true],
