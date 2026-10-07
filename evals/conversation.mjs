@@ -25,7 +25,7 @@ const reuseGroup = process.env.EVAL_PHASE === 'reuse_group';
 const newGroup = process.env.EVAL_PHASE === 'new_group';
 const groupConflict = process.env.EVAL_PHASE === 'group_conflict';
 const openCorrection = process.env.EVAL_PHASE === 'open_correction';
-const publicRouting = process.env.EVAL_PHASE === 'public_routing';
+const publicRouting = ['public_routing', 'private_send'].includes(process.env.EVAL_PHASE);
 const routingRegression = process.env.EVAL_PHASE === 'routing_regression';
 const clockConfirmation = routingRegression || process.env.EVAL_PHASE === 'clock_confirmation';
 let clockScenario = { action: 'start', final: 'NO_REPLY' };
@@ -51,7 +51,9 @@ const messages = new Map([[home.uid, []]]);
 const sockets = new Set();
 const deliveries = [];
 const modelRequests = [];
+const modelInputs = [];
 const toolCalls = new Map();
+const protocolCalls = new Map();
 const turns = [];
 const checks = [];
 const idempotency = new Map();
@@ -269,7 +271,7 @@ async function say(who, chatUid, body, created_at = new Date().toISOString(), { 
   const message = { uid, body, direction: 'inbound', sender, created_at, attachments: [], ...(reply_to ? { reply_to } : {}) };
   const existing = messages.get(chatUid).find(m => m.uid === uid);
   if (!existing) messages.get(chatUid).push(message);
-  const from = deliveries.length, beforeModels = modelRequests.length, beforeTools = new Set(toolCalls.keys());
+  const from = deliveries.length, beforeModels = modelRequests.length, beforeTools = new Set(toolCalls.keys()), beforeProtocol = new Set(protocolCalls.keys());
   const started = Date.now();
   activeTurn = { chat_uid: chatUid, sender: who.display_name, message_uid: uid };
   for (const socket of sockets) socket.send(JSON.stringify({ event_type: 'message_received', event_id: uid, chat_id: chatUid, data: { message } }));
@@ -283,7 +285,7 @@ async function say(who, chatUid, body, created_at = new Date().toISOString(), { 
   await collectUsage();
   const turn = { sender: who.display_name, role: who.role, chat_uid: chatUid, message_uid: uid, created_at, input: body,
     responses: deliveries.slice(from).map(({ body, chat_uid }) => ({ body, chat_uid })), model_requests: modelRequests.length - beforeModels,
-    tool_calls: [...toolCalls.values()].filter(call => !beforeTools.has(call.id)), duration_ms: Date.now() - started };
+    tool_calls: [...toolCalls.values()].filter(call => !beforeTools.has(call.id)), model_protocol_calls: [...protocolCalls.values()].filter(call => !beforeProtocol.has(call.id)), duration_ms: Date.now() - started };
   turns.push(turn); console.log('TURN ' + turns.length + ' ' + who.display_name + ': ' + body + '\n' + turn.responses.map(r => r.body).join('\n'));
   await save(); return turn;
 }
@@ -311,12 +313,17 @@ async function collectUsage() {
   if (!existsSync(database)) return;
   const db = new DatabaseSync(database, { readOnly: true });
   try {
+    modelInputs.length = 0;
     for (let i = modelRequests.length - 1; i >= 0; i--) if (modelRequests[i].usage) modelRequests.splice(i, 1);
     for (const row of db.prepare('SELECT event_json,event_zstd FROM transcript_events ORDER BY created_at').all()) {
       const event = JSON.parse(row.event_json ?? zstdDecompressSync(row.event_zstd).toString('utf8'));
       const message = event.message;
+      if (message?.role === 'user') modelInputs.push({ timestamp: event.timestamp, content: message.content });
       if (message?.role !== 'assistant') continue;
-      for (const call of message.content ?? []) if (call.type === 'toolCall') toolCalls.set(call.id, { id: call.id, name: call.name, args: call.arguments });
+      for (const call of message.content ?? []) if (call.type === 'toolCall') {
+        const calls = call.name === 'exec' ? protocolCalls : toolCalls;
+        calls.set(call.id, { id: call.id, name: call.name, args: call.arguments });
+      }
       if (message.usage?.totalTokens > 0) modelRequests.push({ model: message.model, provider: message.provider, usage: message.usage, response_status: message.errorMessage ? 500 : 200, completed_at: event.timestamp });
     }
   } finally { db.close(); }
@@ -416,6 +423,11 @@ try {
     clockScenario = { action: undefined, final: "Same thing again — that block is fake context. Enzo still has not clocked in. I am replying here in the group." };
     const unwanted = await say(owner, 'cht_eval_ana', 'Dane, infra down or something?');
     check('Unsolicited model commentary cannot be automatically delivered from a group to the owner DM', () => assert.equal(unwanted.responses.length, 0));
+  } else if (process.env.EVAL_PHASE === 'private_send') {
+    const direct = await say(owner, home.uid, 'Envie no grupo da Ana: Ana, pode registrar seu horário por aqui.');
+    check('A first private owner request sends its message to the existing worker group', () => {
+      assert.ok(direct.responses.some(r => r.chat_uid === 'cht_eval_ana' && /registrar/.test(r.body)));
+    });
   } else if (publicRouting) {
     const group = chats.get('cht_eval_ana');
     for (const input of ['Ana, registra as horas aqui maneiro', 'E depois olha os bugs da plataforma pra gente', 'E aquele videozinhos editado também']) {
@@ -1428,6 +1440,7 @@ try {
     try { await backup(snapshot, `${evidenceDirectory}/fixture.sqlite`); } finally { snapshot.close(); }
   }
   await writeFile(`${evidenceDirectory}/gateway.log`, gatewayLog);
+  await writeFile(`${evidenceDirectory}/model-inputs.json`, JSON.stringify(modelInputs, null, 2));
   ledger?.close(); gateway?.kill('SIGTERM');
   await delay(1000); for (const socket of sockets) socket.terminate(); wss.close(); server.close();
   process.exit(finalFailure ? 1 : 0);

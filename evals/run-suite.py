@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import uuid
 
-PHASES = ['public_routing', 'open_correction', 'work_overview', 'semantic_payment',
+PHASES = ['public_routing', 'private_send', 'open_correction', 'work_overview', 'semantic_payment',
           'alder_reconciliation', 'alder_earnings', 'alder_private_noise',
           'alder_group_delivery', 'private_notice_failure', 'tool_protocol',
           'group_failure', 'clock_confirmation', 'new_group', 'reuse_group',
