@@ -159,6 +159,29 @@ test("accepted group requests and saved rosters do not claim iMessage availabili
   assert.match(registered.details.verification_scope, /delivery have not been checked/);
 });
 
+test("registration exposes an earlier same-name profile as facts without deactivating it", async t => {
+  await websocketFixture(t);
+  hoursLedger().manage({ action: "contractor", id: "old-alex", name: "Alex", handle: "wrong@example.test", chat_uid: "cht_old", timezone: "America/New_York", rate_cents: 2000 }, "old-contact");
+  hoursLedger().manage({ action: "demand", id: "landing", contractor_id: "old-alex", project: "Website", summary: "Landing page" }, "old-work");
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith(home.uid)) return Response.json(home);
+    if (url.endsWith(group.uid)) return Response.json(group);
+    if (url.endsWith("/agents/me")) return Response.json({ agent: { web_url: "https://hours.example.test" } });
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const receipt = z.object({ details: z.object({ other_active_registrations: z.array(z.object({
+    contractor: z.object({ id: z.string(), active: z.number() }),
+    demands: z.array(z.object({ summary: z.string() })),
+  })) }) }).parse(await ownerTools()("plow_hours").execute("corrected-contact", {
+    action: "contractor", id: "new-alex", name: "Alex", handle: worker.provider_key,
+    chat_uid: group.uid, timezone: "America/New_York", rate_cents: 2000,
+  }));
+  assert.equal(receipt.details.other_active_registrations.length, 1);
+  assert.equal(receipt.details.other_active_registrations[0].contractor.id, "old-alex");
+  assert.equal(receipt.details.other_active_registrations[0].demands[0].summary, "Landing page");
+  assert.equal(hoursLedger().report("old-alex")[0].contractor.active, 1);
+});
+
 test("rejections, transport failures and malformed accepted responses produce no success receipt or automatic retry", async t => {
   await websocketFixture(t);
   let groupPosts = 0;
