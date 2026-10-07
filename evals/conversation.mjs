@@ -148,7 +148,7 @@ const server = createServer(async (req, res) => {
           choices: [{ index: 0, delta, finish_reason }], ...(usage ? { usage } : {}) })}\n\n`);
         const stream = await client.responses.create({ model: 'gpt-6-luna', store: false, stream: true,
           instructions: instructions + (request.stream ? '' : '\nReturn only JSON matching {"participate":boolean}.'),
-          input, reasoning: { effort: 'low' }, ...(request.tools?.length ? { tools: request.tools.map(t => ({
+          input, reasoning: { effort: 'medium' }, ...(request.tools?.length ? { tools: request.tools.map(t => ({
             type: 'function', name: t.function.name, description: t.function.description,
             parameters: t.function.parameters, strict: false,
           })) } : {}),
@@ -287,7 +287,7 @@ if (process.env.EVAL_CODEX_AUTH && !controlledRecovery) {
   if (newGroup) config.agents.entries = { ...config.agents.entries, main: {
     ...config.agents.entries?.main, model: { primary: 'plow/openai/gpt-6-luna', fallbacks: [] },
   } };
-  config.agents.defaults.thinkingDefault = 'low';
+  config.agents.defaults.thinkingDefault = 'medium';
   config.models.providers.plow.models = [{ ...config.models.providers.plow.models[0], id: 'openai/gpt-6-luna', name: 'Local OAuth Luna' }];
 }
 await syncConfig(config, '/var/lib/plow/openclaw.json', '/etc/plow/openclaw');
