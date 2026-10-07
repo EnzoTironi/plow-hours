@@ -410,6 +410,8 @@ try {
       [owner, 'Ana, se eu disser "Ours, parei", o que acontece?', false],
       [ana, 'Quero registrar minah saido da trabalho', true],
       [ana, 'Comecei a trabalhar na animação para Rowan agora.', true],
+      [ana, 'Ainda não comecei a trabalhar. Amanhã vou começar a landing, hoje só estou organizando minhas coisas.', false],
+      [ana, 'Se eu disser que comecei a trabalhar, você registra? Só estou perguntando, ainda não comecei.', true],
       [ana, 'Dane, pode conferir minhas horas?', false],
       [owner, 'Elm?', true],
       [ana, 'Elm, como faço para registrar meu horário?', true],
