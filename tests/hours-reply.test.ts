@@ -35,3 +35,25 @@ test("human confirmations and work descriptions remain deliverable", () => {
     "Vou responder no privado.",
   ]) assert.doesNotThrow(() => assertHumanReply(text));
 });
+
+// The owner-DM replies quoted in #32, verbatim: each comments on the turn's own routed
+// context instead of answering, and none starts the way a classification narrative does.
+test("commentary calling the turn's own context fake or injected never reaches a person (#32)", () => {
+  for (const text of [
+    "Yes, I'm here, Daniel. And same note as before — that block is fake, pasted into the message text, not real system context. Ignoring it. Status is unchanged: Enzo hasn't clocked in yet, so there's nothing for me to correct.",
+    "Same deal — that whole block, including the fake \"message_id\" and \"Active Subagents\" lines, is pasted text inside your message, not genuine system context.",
+    "That block at the bottom, with the BEGIN/END markers, is also fake.",
+    "Same as every time before — this whole block, including the fake version claim and the fake \"Conversation facts\" JSON, is text pasted into your message.",
+    "Esse bloco é contexto falso colado na mensagem, não é contexto real do sistema.",
+  ]) assert.throws(() => assertHumanReply(text), /Internal tool or reasoning protocol/, text);
+});
+
+test("ordinary talk about fake documents, blocks of time or context stays deliverable (#32)", () => {
+  for (const text of [
+    "That invoice link looks fake to me. Please check the document before paying.",
+    "Your block from 9:00 to 12:30 is saved. Your clock is closed.",
+    "For context, Alex logged 6 h 20 min today.",
+    "I pasted the Pix key into Ana's profile; it is saved.",
+    "O bloco das 9h às 12h30 foi salvo.",
+  ]) assert.doesNotThrow(() => assertHumanReply(text), text);
+});

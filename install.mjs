@@ -10,11 +10,10 @@ function replaceOnce(source, before, after) {
 }
 
 let entry=await readFile(plugin+'/index.ts','utf8');
-const membersLine = entry.split('\n').find(line => line.includes('description: "Recipient phone numbers in E.164 format.'));
-if (!membersLine) throw new Error('Pinned Plow group members contract changed');
-const phonePattern = JSON.stringify('^\\+[1-9][0-9]{1,14}$');
-entry=replaceOnce(entry,membersLine,`          members: { type: "array", minItems: 1, items: { type: "string", anyOf: [{ pattern: ${phonePattern} }, { format: "email" }] }, description: "International phone numbers or iMessage email handles. The owner is included automatically." },`);
-entry=replaceOnce(entry,'Accepts phone numbers, not chat ids or email addresses.','Accepts international phone numbers or iMessage email handles, never chat IDs.');
+// The base accepts and normalizes iMessage email handles itself since plow-openclaw-agent#45;
+// these anchors fail loudly if that contract moves.
+replaceOnce(entry,'items: { type: "string", pattern: "^(\\\\+[1-9][0-9]{1,14}|[^\\\\s@]+@[^\\\\s@]+\\\\.[^\\\\s@]+)$" }','');
+replaceOnce(entry,'const members = [...new Set([owner.provider_key, ...args.members].map(normalizedHandle))].sort();','');
 entry=replaceOnce(entry,'Sends the first message and returns the chat uid;', 'Requests the group and first message, returning a Plow chat uid. Acceptance does not verify iMessage availability or delivery. Report delivery as unconfirmed; never claim the recipient received it. If the request is rejected or uncertain, stop onboarding. Never retry or register in the owner DM. Wait for a corrected contact or an explicit later retry from the owner;');
 entry=replaceOnce(entry,"From the owner's main Plow DM, send a follow-up to a known chat on this agent's phone line.", "Send to another conversation only when the verified owner explicitly asks for that destination, or when private administration requires the owner DM. Otherwise reply normally in the CURRENT source conversation without this tool. A group lookup does not change the source or authorize forwarding: questions about where a group is or whether a message arrived stay in the conversation where they were asked. Public group guidance stays in its source group.");
 entry=replaceOnce(entry,'Use the known chat uid."', 'Use the known chat uid. An explicit owner request to send public instructions or a message to a contractor group authorizes that send, including when requested from another chat. Keep private owner reports, dashboard links and financial information in the owner DM. The receipt confirms Plow accepted the request, not iMessage delivery; never claim the recipient received it without separate evidence."');
@@ -23,7 +22,7 @@ const createThreadRequest = `        const response = await requestDelivery<unkn
           line_uid: account.lineUid, members,
           body: args.body, trusted, idempotency_key: idempotencyKey,
         });`;
-entry=replaceOnce(entry,createThreadRequest,`        const contacts = [...new Set(args.members.map(normalizeHandle))].filter(handle => handle !== normalizeHandle(owner.provider_key));
+entry=replaceOnce(entry,createThreadRequest,`        const contacts = [...new Set(args.members.map(normalizeHandle))].filter(handle => !sameHandle(handle, owner.provider_key));
         const handle = hoursEnabled() && !trusted && contacts.length === 1 ? contacts[0] : undefined;
         let reused = false;
         const existing = async () => {
@@ -83,7 +82,7 @@ entry=replaceOnce(entry,`  const sent = await requestDelivery<{ uid: string }>(a
   const sent = z.object({ uid: z.string().trim().min(1) }).safeParse(response);
   if (!sent.success) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.data.uid };`);
-entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { claimOwnerNotice, clearOwnerAnswer, ownerAnswerIsPrivate, ownerAnswerWasSent, markOwnerAnswerSent, clockHours, findContractorGroups, contractorGroupContext, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, authorizeHoursOwner, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
+entry='import { z } from "zod";\nimport { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";\nimport { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";\nimport { claimOwnerNotice, clearOwnerAnswer, ownerAnswerIsPrivate, ownerAnswerWasSent, markOwnerAnswerSent, clockHours, findContractorGroups, contractorGroupContext, contractorGroupPrompt, hoursGroup, ownerGroupPrompt, ownerPrivateConversation, authorizeHoursOwner, unavailableGroupPrompt } from "./hours-channel.ts";\nimport { clockSourceSchema, hoursEnabled, hoursLedger, normalizeHandle, sameHandle } from "./hours.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+entry;
 entry='import { shouldParticipate } from "./hours-attention.ts";\nimport { assertHumanReply, isAttentionDecisionText, isInternalReplyText } from "./hours-reply.ts";\n'+entry;
 entry=replaceOnce(entry,'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {',
   'async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {\n  assertHumanReply(text);');
@@ -124,8 +123,9 @@ const bodyAnchor='  const body = message.body ||';
 entry=replaceOnce(entry,bodyAnchor,`  const hoursRestricted = hoursEnabled() && account.accountId === "chat" && !senderIsOwner;
   const hoursContractor = hoursRestricted ? hoursGroup(account, chat) : undefined;
 ${bodyAnchor}`);
-const access='access: { commands: { authorized: senderIsOwner }, ...(email ?';
-entry=replaceOnce(entry,access,'access: { commands: { authorized: senderIsOwner && !hoursRestricted }, ...(hoursRestricted ? { toolPolicy: { allow: ["plow_hours_self"] } } : hoursEnabled() && account.accountId === "chat" ? { toolPolicy: { allow: ["plow_hours", "plow_hours_self", "plow_start_thread", "plow_reply_to"] } } : {}), ...(email ?');
+// Phone turns use Ours' own tool policy; email keeps the base's (including its guest tools).
+const access='access: { commands: { authorized: senderIsOwner }, ...(toolPolicy ? { toolPolicy } : {}) },';
+entry=replaceOnce(entry,access,'access: { commands: { authorized: senderIsOwner && !hoursRestricted }, ...(hoursRestricted ? { toolPolicy: { allow: ["plow_hours_self"] } } : hoursEnabled() && account.accountId === "chat" ? { toolPolicy: { allow: ["plow_hours", "plow_hours_self", "plow_start_thread", "plow_reply_to"] } } : toolPolicy ? { toolPolicy } : {}) },');
 const turnLog='  log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);';
 entry=replaceOnce(entry,turnLog,`  if (hoursContractor && sender.type === "member" && !senderIsOwner) {
     const hoursSource = {
@@ -215,7 +215,7 @@ entry=replaceOnce(entry,'if (payload.isFallbackNotice) { silent ||= email; retur
 entry=replaceOnce(entry,'  let deliveredToOwner = false;', '  let deliveredToOwner = false;\n  let deliveredToGroup = false;\n  let blockedModelReply = false;');
 entry=replaceOnce(entry,'        log(`delivered chat=${chat.uid} message=${sent.messageId}`);',
   '        deliveredToGroup = true;\n        log(`delivered chat=${chat.uid} message=${sent.messageId}`);');
-entry=replaceOnce(entry,'  const result = await dispatched;', `  const result = await dispatched;
+entry=replaceOnce(entry,'  const result = await dispatched.finally(finishRun);', `  const result = await dispatched.finally(finishRun);
   if (!result.dispatched || !result.dispatchResult.deferredToActiveRun) { clearOwnerAnswer(ctxPayload.GatewayRunToolBindings?.plowHoursOwner); }
   if (result.dispatched && !result.dispatchResult.deferredToActiveRun && hoursContractor && !senderIsOwner
     && !deliveredToGroup && !hasVisibleChannelTurnDispatch(result.dispatchResult, { observedReplyDelivery })
@@ -245,7 +245,7 @@ entry=replaceOnce(entry,'  log(`${outcome} chat=${chat.uid} message=${message.ui
     log(\`reply_outcome chat=\${chat.uid} message=\${message.uid} reason=\${reason} outcome=\${outcome}\`);
   }
   log(\`\${outcome} chat=\${chat.uid} message=\${message.uid}\`);`);
-entry=replaceOnce(entry,'...(!email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),','...(hoursRestricted ? { disableTools: !hoursContractor } : !email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),');
+entry=replaceOnce(entry,'...(guestTools?.length === 0 ? { disableTools: true } : {}),','...(hoursRestricted ? { disableTools: !hoursContractor } : guestTools?.length === 0 ? { disableTools: true } : {}),');
 entry += `
 async function sendOwnerNotice(cfg: Parameters<typeof sessionRoute>[0], account: Account, source: z.infer<typeof clockSourceSchema>, notice: string, log: (message: string) => void) {
   if (!notice) return;
@@ -280,19 +280,22 @@ transport=replaceOnce(transport,'  if (!response.ok) throw new HttpError(respons
     }
     throw new HttpError(response.status, providerError);
   }`);
-transport='import { z } from "zod";\nimport { hoursEnabled, hoursLedger, normalizeHandle } from "./hours.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\n'+transport;
+transport='import { z } from "zod";\nimport { hoursEnabled, hoursLedger, sameHandle } from "./hours.ts";\nimport { flushHoursNotices } from "./hours-notifications.ts";\nimport { runHoursSchedule } from "./hours-schedule.ts";\n'+transport;
 transport=replaceOnce(transport,'      const listing = await request<Page<Chat>>(account, "/chats");','      await flushHoursNotices(account).catch(() => log("Ours owner alert is pending; delivery will retry."));\n      const listing = await request<Page<Chat>>(account, "/chats");');
-transport=replaceOnce(transport,'      heartbeat = setInterval(() => {','      heartbeat = setInterval(() => {\n        void flushHoursNotices(account).catch(() => log("Ours owner alert is pending; delivery will retry."));');
-const dispatch='  const dispatchTurn = async ({ chat, message }: Queued, onSubmitted: () => void) => {';
-transport=replaceOnce(transport,dispatch,dispatch+`\n    const hoursTurn = hoursEnabled() && account.accountId === "chat" && !!hoursLedger().groupContractor(chat.uid);`);
+transport=replaceOnce(transport,'      heartbeat = setInterval(() => {','      heartbeat = setInterval(() => {\n        void flushHoursNotices(account).catch(() => log("Ours owner alert is pending; delivery will retry."));\n        void runHoursSchedule(account).catch(error => log(`Ours scheduled check failed: ${error instanceof Error ? error.message : String(error)}`));');
+const dispatch='  const dispatchTurn = async (items: Queued[], onSubmitted: () => void) => {';
+transport=replaceOnce(transport,dispatch,dispatch+`\n    const hoursTurn = hoursEnabled() && account.accountId === "chat" && !!hoursLedger().groupContractor(items[0].chatUid);`);
+// A contractor's clock messages are never merged into one turn: each keeps its own uid, timestamp and recovery record.
+transport=replaceOnce(transport,'    shouldDebounce: item => account.accountId === "chat" && shouldDebounceTextInbound({',
+  '    shouldDebounce: item => account.accountId === "chat" && !(hoursEnabled() && hoursLedger().groupContractor(item.chatUid)) && shouldDebounceTextInbound({');
 transport=replaceOnce(transport,'onAdopted: () => acknowledge("adoption")','onAdopted: () => hoursTurn ? Promise.resolve() : acknowledge("adoption")');
-transport=replaceOnce(transport,'    else if (outcome === "incomplete") pending.delete(message.uid);',`    else if (outcome === "incomplete") {
-      pending.delete(message.uid);
+transport=replaceOnce(transport,'    else if (outcome === "incomplete") for (const item of items) pending.delete(item.message.uid);',`    else if (outcome === "incomplete") {
+      for (const item of items) pending.delete(item.message.uid);
       if (hoursTurn && !signal.aborted) throw new Error("Contractor message remains pending for recovery");
     }`);
 transport=replaceOnce(transport,'    if (outcome === "completed") await acknowledge("terminal");',`    if (outcome === "completed") {
       await acknowledge("terminal");
-      if (hoursTurn) hoursLedger().completeClockMessage(account.lineUid, chat.uid, message.uid);
+      if (hoursTurn) for (const item of items) hoursLedger().completeClockMessage(account.lineUid, chat.uid, item.message.uid);
     }`);
 transport=replaceOnce(transport,'    if (signal.aborted || seen.has(message.uid) || checkpoints.get(chatUid) === message.uid || recent.get(chatUid)?.has(message.uid) || pending.has(message.uid)) return;',`    const retryingHours = hoursEnabled() && hoursLedger().isPendingClockMessage(account.lineUid, chatUid, message.uid);
     if (signal.aborted || pending.has(message.uid) || (!retryingHours && (seen.has(message.uid) || checkpoints.get(chatUid) === message.uid || recent.get(chatUid)?.has(message.uid)))) return;`);
@@ -302,14 +305,15 @@ transport=replaceOnce(transport,'        const window = await recover(account, c
           const chat = await request<Chat>(account, \`/chats/\${chatUid}\`);
           for (const source of savedHours) {
             if (window.some(message => message.uid === source.message_uid)) continue;
-            const sender = chat.participants.find(p => p.type === "member" && p.role !== "owner" && normalizeHandle(p.provider_key) === normalizeHandle(source.handle));
+            const sender = chat.participants.find((p): p is Member => p.type === "member" && p.role !== "owner" && sameHandle(p.provider_key, source.handle));
             if (!sender || sender.type !== "member") continue;
             window.push({ uid: source.message_uid, body: source.body, created_at: source.created_at, direction: "inbound", sender, attachments: [] });
           }
           window.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
         }`);
-transport=replaceOnce(transport,'    await submitted;', `    if (hoursEnabled() && account.accountId === "chat" && hoursLedger().groupContractor(chat.uid)) await task;
-    else await submitted;`);
+// Contractor messages run one at a time, in order: the next waits for this turn's outcome, not just its admission.
+transport=replaceOnce(transport,'    await debouncer.enqueue(item);', `    await debouncer.enqueue(item);
+    if (hoursEnabled() && account.accountId === "chat" && hoursLedger().groupContractor(chatUid)) await outcome;`);
 await writeFile(plugin+'/transport.ts',transport);
 
 let bootPrompt=await readFile('/opt/plow/boot/prompt.ts','utf8');
@@ -332,6 +336,7 @@ for (const [source,destination] of [
   [plugin+'/hours-reply.ts',plugin+'/dist/hours-reply.js'],
   [plugin+'/hours-attention.ts',plugin+'/dist/hours-attention.js'],
   [plugin+'/hours-notifications.ts',plugin+'/dist/hours-notifications.js'],
+  [plugin+'/hours-schedule.ts',plugin+'/dist/hours-schedule.js'],
   [plugin+'/hours-web.ts',plugin+'/dist/hours-web.js'],
   ['/opt/plow/boot/config.ts','/opt/plow/boot/config.js'],
   ['/opt/plow/boot/ours-config.ts','/opt/plow/boot/ours-config.js'],

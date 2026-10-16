@@ -46,6 +46,9 @@ export const managementSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("manual"), contractor_id: id, demand_id: id, start: timestamp, finish: timestamp,
     rate_cents: z.number().int().min(0).max(100_000_000), reason: text, details: z.string().max(4000).default("") }).strict(),
   z.object({ action: z.literal("report"), contractor_id: id.optional() }).strict(),
+  z.object({ action: z.literal("settings"), daily_summary: z.boolean().optional().describe("The evening summary in this DM; true by default."),
+    summary_timezone: text.optional().describe("IANA time zone for the summary's day and its 19:00 send time."),
+    summary_language: z.enum(["en", "pt"]).optional().describe("Defaults to the language most contractors use.") }).strict(),
   z.object({ action: z.literal("link_sheet"), contractor_id: id, sheet_id: z.string().regex(/^[A-Za-z0-9_-]{10,200}$/) }).strict(),
   z.object({ action: z.literal("projected"), contractor_id: id, target: z.enum(["sheet", "wiki"]),
     sheet_id: z.string().optional(), revision: z.number().int().min(1) }).strict(),
@@ -58,6 +61,12 @@ export type Management = z.infer<typeof managementSchema>;
 export function normalizeHandle(handle: string): string {
   const compact = handle.trim().replace(/[\s().-]/g, "");
   return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
+}
+
+// Plow rosters can omit a member's handle. A missing handle never matches anyone, so
+// every owner and contractor check that uses this fails closed.
+export function sameHandle(a: string | null | undefined, b: string | null | undefined): boolean {
+  return !!a?.trim() && !!b?.trim() && normalizeHandle(a) === normalizeHandle(b);
 }
 
 export function clockCommand(body: string) {
@@ -79,13 +88,52 @@ export function localTime(ms: number, timezone: string) {
 const hours = (ms: number) => Math.round(ms / 3_600_000 * 1_000_000) / 1_000_000;
 type Language = "en" | "pt";
 /** A local receipt time with the date when it is not today. */
-export function clockTime(ms: number, timezone: string, language: Language) {
+export function clockTime(ms: number, timezone: string, language: Language, now = Date.now()) {
   const day = (at: number) => new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
   const saoPaulo = timezone === "America/Sao_Paulo";
   const label = saoPaulo ? language === "pt" ? " (horário de São Paulo)" : " (São Paulo time)" : "";
   return new Intl.DateTimeFormat(language === "pt" ? "pt-BR" : "en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit",
-    ...(saoPaulo ? {} : { timeZoneName: "short" as const }), ...(day(ms) === day(Date.now()) ? {} : { month: "short", day: "numeric" }) }).format(ms) + label;
+    ...(saoPaulo ? {} : { timeZoneName: "short" as const }), ...(day(ms) === day(now) ? {} : { month: "short", day: "numeric" }) }).format(ms) + label;
 }
+
+// Proactive care: computed from the ledger, sent by hours-schedule.ts without a model turn.
+export const OPEN_CLOCK_NUDGE_MS = 10 * 3_600_000;
+const NUDGE_LOCAL_HOURS = { from: 8, until: 21 };
+export const SUMMARY_LOCAL_HOUR = 19;
+const DEFAULT_SUMMARY_TIMEZONE = "America/Sao_Paulo"; // the agent's configured userTimezone
+const localHour = (ms: number, timezone: string) =>
+  Number(new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hourCycle: "h23" }).format(ms));
+const localDay = (ms: number, timezone: string) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
+const wholeMinutes = (ms: number) => duration(Math.floor(ms / 60_000) * 60_000);
+const validTimezone = (timezone: string) => {
+  try { new Intl.DateTimeFormat("en", { timeZone: timezone }); return timezone; }
+  catch { throw new Error(`Unknown time zone: ${timezone}. Use an IANA name such as America/New_York.`); }
+};
+const SUMMARY = {
+  en: {
+    title: (day: string) => `Today's hours, ${day}:`,
+    worked: (name: string, total: string, amount: string) => `• ${name}: ${total} (${amount})`,
+    running: (at: string) => `clock running since ${at}`,
+    needs: "Needs you:",
+    reviewLong: (name: string) => `${name} has a session over 12 h to review`,
+    unmatched: (name: string) => `${name} has a finish without a start`,
+    clockReview: (name: string) => `${name} has a clock message to review`,
+    invoice: (name: string) => `${name}'s invoice is ready for your review`,
+    intro: "I send this each evening when there's work to show. Say \"stop the daily summary\" to turn it off.",
+  },
+  pt: {
+    title: (day: string) => `Horas de hoje, ${day}:`,
+    worked: (name: string, total: string, amount: string) => `• ${name}: ${total} (${amount})`,
+    running: (at: string) => `ponto aberto desde ${at}`,
+    needs: "Precisa de você:",
+    reviewLong: (name: string) => `${name} tem uma sessão de mais de 12 h para revisar`,
+    unmatched: (name: string) => `${name} tem um encerramento sem início`,
+    clockReview: (name: string) => `${name} tem uma mensagem de ponto para revisar`,
+    invoice: (name: string) => `a fatura de ${name} está pronta para sua revisão`,
+    intro: "Envio este resumo à noite quando há trabalho para mostrar. Diga \"parar o resumo diário\" para desligar.",
+  },
+} as const;
 /** Human duration without rounding partial minutes into extra recorded work. */
 export function duration(ms: number) {
   const seconds = Math.floor(Math.max(0, ms) / 1000);
@@ -122,6 +170,12 @@ const RECEIPTS = {
     ownerClosed: "O dono revisou e encerrou esta pendência; nenhuma hora foi acrescentada por esta mensagem.",
     ownerConfirmed: (start: string, finish: string, total: string) => `O dono confirmou o início às ${start}. Ponto encerrado às ${finish}. Total: ${total}.`,
     voided: "Esse registro foi anulado pelo dono; não conta nas horas.",
+    openClock: (at: string, open: string, owner: string) => `Seu ponto está aberto desde ${at} (${open}). Ainda trabalhando? Se já terminou, é só dizer "terminei" (ou /out). Se parou antes, responda com o horário em que parou para ${owner} corrigir.`,
+    welcome: (name: string, owner: string) => `Oi, ${name}! Aqui você registra suas horas para ${owner}. É só me avisar enquanto trabalha:
+• "Começando agora" abre seu ponto.
+• "Vou fazer uma pausa" pausa o ponto; pausas não contam.
+• "Terminei por hoje" fecha o ponto e te mostra o total.
+Conte no que está trabalhando quando quiser. Pergunte "quantas horas essa semana?" a qualquer momento. Atalhos: /in e /out.`,
   },
   en: {
     lateStart: "This start arrived late and comes before the clock that is already running.",
@@ -149,6 +203,12 @@ const RECEIPTS = {
     ownerClosed: "The owner reviewed and closed this item; no hours were added from this message.",
     ownerConfirmed: (start: string, finish: string, total: string) => `The owner confirmed the start at ${start}. Clock stopped at ${finish}. Total: ${total}.`,
     voided: "The owner voided this record; it doesn't count toward hours.",
+    openClock: (at: string, open: string, owner: string) => `Your clock has been running since ${at} (${open}). Still working? If you're done, just say "done" (or /out). If you stopped earlier, reply with the time you stopped so ${owner} can correct it.`,
+    welcome: (name: string, owner: string) => `Hi ${name}! This group is where you log your hours for ${owner}. Just tell me as you work:
+• "Starting work now" opens your clock.
+• "Taking a break" pauses it; breaks don't count.
+• "Finished for today" closes it and tells you the total.
+Tell me what you're working on whenever you like. Ask "How many hours this week?" anytime. Shortcuts: /in and /out.`,
   },
 } satisfies Record<Language, Record<string, string | ((...args: never[]) => string)>>;
 type ConflictReason = "lateStart" | "confirmBeforeStart" | "overlaps" | "afterClose" | "stopCrosses";
@@ -223,6 +283,15 @@ export class HoursLedger {
       if (!this.db.prepare("PRAGMA table_info(owner_notices)").all().some(row => row.name === "body"))
         this.db.exec("ALTER TABLE owner_notices ADD COLUMN body TEXT NOT NULL DEFAULT ''");
       this.db.exec("DROP INDEX IF EXISTS one_open_entry; CREATE UNIQUE INDEX one_open_entry ON entries(contractor_id) WHERE end_ms IS NULL AND voided=0;");
+      // Each contractor group gets one how-to-log-time message, at most once (#30). Groups
+      // registered before this table existed were already set up and are never messaged.
+      const hadWelcomes = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_welcomes'").get();
+      this.db.exec(`CREATE TABLE IF NOT EXISTS group_welcomes (chat_uid TEXT PRIMARY KEY, contractor_id TEXT NOT NULL REFERENCES contractors(id),
+        state TEXT NOT NULL CHECK(state IN ('existing','pending','sending','accepted','rejected','unknown')), message_uid TEXT)`);
+      if (!hadWelcomes) this.db.exec("INSERT OR IGNORE INTO group_welcomes(chat_uid, contractor_id, state) SELECT chat_uid, id, 'existing' FROM contractors");
+      this.db.exec(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS schedule_log (kind TEXT NOT NULL CHECK(kind IN ('open_clock','summary')), key TEXT NOT NULL,
+          state TEXT NOT NULL CHECK(state IN ('sending','accepted','rejected','unknown','empty')), PRIMARY KEY(kind, key));`);
       this.db.exec("UPDATE clock_inbox SET source_json=json_set(source_json, '$.body', '') WHERE complete=1;");
       // Old work-note receipts must not consume a start/stop from the same message.
       this.db.exec(`UPDATE receipts SET source='note:' || source
@@ -255,6 +324,100 @@ export class HoursLedger {
   assertInstallationLine(lineUid: string) {
     const current = this.db.prepare("SELECT line_uid FROM installation WHERE singleton=1").get();
     if (!current || current.line_uid !== lineUid) throw new Error("This hours volume must boot with its authenticated Plow owner and line before accepting messages.");
+  }
+
+  /** The group's how-to-log-time text if its single welcome is still unsent; claiming it
+   * means no later call will send it again, whatever happens to this attempt. */
+  claimWelcome(chatUid: string, ownerName: string | undefined): string | undefined {
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT contractor_id FROM group_welcomes WHERE chat_uid=? AND state='pending'").get(chatUid);
+      if (!row) return undefined;
+      const contractor = this.contractor(z.object({ contractor_id: id }).parse(row).contractor_id);
+      this.db.prepare("UPDATE group_welcomes SET state='sending' WHERE chat_uid=?").run(chatUid);
+      const owner = ownerName?.trim() || (contractor.language === "pt" ? "o dono" : "the owner");
+      return RECEIPTS[contractor.language].welcome(contractor.name, owner);
+    });
+  }
+
+  settings() {
+    const saved = Object.fromEntries(this.db.prepare("SELECT key, value FROM settings").all()
+      .map(row => z.object({ key: z.string(), value: z.string() }).parse(row)).map(row => [row.key, JSON.parse(row.value)]));
+    return z.object({ daily_summary: z.boolean(), summary_timezone: z.string(), summary_language: z.enum(["en", "pt"]).nullable() }).parse({
+      daily_summary: saved.daily_summary ?? true, summary_timezone: saved.summary_timezone ?? DEFAULT_SUMMARY_TIMEZONE, summary_language: saved.summary_language ?? null });
+  }
+
+  /** Open clocks of active contractors running ten hours or more, not yet nudged, during the
+   * contractor's local daytime. Nothing is claimed here. */
+  dueOpenClockNudges(now: number) {
+    return this.db.prepare(`SELECT e.id AS entry_id, e.start_ms, e.contractor_id FROM entries e JOIN contractors c ON c.id = e.contractor_id
+      WHERE e.end_ms IS NULL AND e.voided = 0 AND c.active = 1 AND e.start_ms <= ?
+      AND NOT EXISTS (SELECT 1 FROM schedule_log s WHERE s.kind = 'open_clock' AND s.key = e.id) ORDER BY e.start_ms`).all(now - OPEN_CLOCK_NUDGE_MS)
+      .map(row => z.object({ entry_id: z.string(), start_ms: z.number().int(), contractor_id: id }).parse(row))
+      .map(row => ({ entry_id: row.entry_id, start_ms: row.start_ms, contractor: this.contractor(row.contractor_id) }))
+      .filter(({ contractor }) => { const hour = localHour(now, contractor.timezone); return hour >= NUDGE_LOCAL_HOURS.from && hour < NUDGE_LOCAL_HOURS.until; });
+  }
+
+  openClockNudgeText(contractorId: string, ownerName: string | undefined, now: number) {
+    const contractor = this.contractor(contractorId), entry = this.open(contractorId);
+    if (!entry) throw new Error("This contractor has no open clock.");
+    const owner = ownerName?.trim() || (contractor.language === "pt" ? "o dono" : "the owner");
+    return RECEIPTS[contractor.language].openClock(clockTime(entry.start_ms, entry.timezone, contractor.language, now), wholeMinutes(now - entry.start_ms), owner);
+  }
+
+  /** At most once per kind and key, ever: a claimed send is never attempted again. */
+  claimScheduled(kind: "open_clock" | "summary", key: string) {
+    return this.db.prepare("INSERT OR IGNORE INTO schedule_log(kind, key, state) VALUES (?, ?, 'sending')").run(kind, key).changes === 1;
+  }
+
+  /** Only before any send was attempted: the next heartbeat may claim it again. */
+  releaseScheduled(kind: "open_clock" | "summary", key: string) {
+    this.db.prepare("DELETE FROM schedule_log WHERE kind=? AND key=? AND state='sending'").run(kind, key);
+  }
+
+  finishScheduled(kind: "open_clock" | "summary", key: string, state: "accepted" | "rejected" | "unknown" | "empty") {
+    this.db.prepare("UPDATE schedule_log SET state=? WHERE kind=? AND key=? AND state='sending'").run(state, kind, key);
+  }
+
+  /** The owner's evening summary for today in the summary timezone: undefined when off, too
+   * early or already handled; no text on a day with nothing to say. */
+  dailySummary(now: number): { key: string; text?: string } | undefined {
+    const settings = this.settings();
+    if (!settings.daily_summary || localHour(now, settings.summary_timezone) < SUMMARY_LOCAL_HOUR) return undefined;
+    const key = localDay(now, settings.summary_timezone);
+    if (this.db.prepare("SELECT 1 FROM schedule_log WHERE kind='summary' AND key=?").get(key)) return undefined;
+    const bounds = periodBounds(key, key, settings.summary_timezone);
+    const reports = this.report().filter(report => report.contractor.active);
+    const languages = reports.map(report => report.contractor.language);
+    const language = settings.summary_language ?? (languages.filter(l => l === "pt").length > languages.length / 2 ? "pt" : "en");
+    const copy = SUMMARY[language];
+    const lines: string[] = [], needs: string[] = [];
+    for (const report of reports) {
+      const { name } = report.contractor;
+      const today = periodValue(report.entries, bounds);
+      const running = report.open_entry ? copy.running(clockTime(report.open_entry.start_ms, report.open_entry.timezone, language, now)) : undefined;
+      if (today.duration_ms > 0) lines.push(copy.worked(name, duration(today.duration_ms), usd(today.amount_usd_cents)) + (running ? `, ${running}` : ""));
+      else if (running) lines.push(`• ${name}: ${running}`);
+      if (report.review_needed.length) needs.push(copy.reviewLong(name));
+      if (report.pending_clock.unmatched_stops) needs.push(copy.unmatched(name));
+      if (report.pending_clock.reviews.length) needs.push(copy.clockReview(name));
+      const billing = this.billingReport(report.contractor.id);
+      if (billing.ready_for_owner_review && !billing.approved) needs.push(copy.invoice(name));
+    }
+    if (!lines.length && !needs.length) return { key };
+    // The off switch is explained in the first summary that went out, or may have.
+    const introduced = this.db.prepare("SELECT 1 FROM schedule_log WHERE kind='summary' AND state IN ('sending','accepted','unknown')").get();
+    const day = new Intl.DateTimeFormat(language === "pt" ? "pt-BR" : "en-US", { timeZone: settings.summary_timezone, weekday: "short",
+      ...(language === "pt" ? { day: "2-digit", month: "2-digit" } as const : { month: "short", day: "numeric" } as const) }).format(now);
+    return { key, text: [copy.title(day), ...lines, ...(needs.length ? [`${copy.needs} ${needs.join("; ")}.`] : []), ...(introduced ? [] : [copy.intro])].join("\n") };
+  }
+
+  welcomeState(chatUid: string) {
+    const row = this.db.prepare("SELECT state FROM group_welcomes WHERE chat_uid=?").get(chatUid);
+    return row ? z.object({ state: z.enum(["existing", "pending", "sending", "accepted", "rejected", "unknown"]) }).parse(row).state : undefined;
+  }
+
+  finishWelcome(chatUid: string, state: "accepted" | "rejected" | "unknown", messageUid?: string) {
+    this.db.prepare("UPDATE group_welcomes SET state=?, message_uid=? WHERE chat_uid=? AND state='sending'").run(state, messageUid ?? null, chatUid);
   }
 
   groupContractor(chatUid: string) {
@@ -714,6 +877,15 @@ export class HoursLedger {
           this.bump(input.contractor_id); this.audit(source, input.action, undefined, input);
           return { demand_id: input.demand_id, active: false };
         }
+        case "settings": {
+          const before = this.settings();
+          if (input.summary_timezone !== undefined) validTimezone(input.summary_timezone);
+          for (const key of ["daily_summary", "summary_timezone", "summary_language"] as const) {
+            if (input[key] !== undefined) this.db.prepare("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, JSON.stringify(input[key]));
+          }
+          this.audit(source, input.action, before, this.settings());
+          return this.settings();
+        }
         case "contractor": {
           new Intl.DateTimeFormat("en", { timeZone: input.timezone });
           const handle = normalizeHandle(input.handle);
@@ -726,6 +898,7 @@ export class HoursLedger {
           this.db.prepare(`INSERT INTO contractors(id, name, handle, chat_uid, timezone, rate_cents, language) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET name=excluded.name, timezone=excluded.timezone, rate_cents=excluded.rate_cents, language=excluded.language, active=1, revision=contractors.revision+1`)
             .run(input.id, input.name, handle, input.chat_uid, input.timezone, input.rate_cents, input.language);
+          if (!before) this.db.prepare("INSERT OR IGNORE INTO group_welcomes(chat_uid, contractor_id, state) VALUES (?, ?, 'pending')").run(input.chat_uid, input.id);
           this.audit(source, input.action, before, this.contractor(input.id));
           return { contractor_id: input.id, registered: true };
         }
@@ -872,6 +1045,11 @@ export class HoursLedger {
       const stops = this.unmatchedStops(contractor.id);
       return {
         contractor, demands, entries, total_hours: hours(duration), open_entry: active ?? null,
+        // Spelled out so "no open clock" is never read as "never clocked in" (#32).
+        voided_entries: entries.filter(e => e.voided).map(e => ({ entry_id: e.id, start: localTime(e.start_ms, e.timezone),
+          finish: e.end_ms === null ? null : localTime(e.end_ms, e.timezone),
+          reason: z.string().nullable().parse(this.db.prepare("SELECT json_extract(after_json, '$.reason') AS reason FROM audit WHERE action='void' AND json_extract(after_json, '$.entry_id')=? ORDER BY seq DESC LIMIT 1").get(e.id)?.reason ?? null),
+          restore: `plow_hours correct with entry_id ${e.id} and restore=true, optionally with the right start` })),
         review_needed: entries.filter(needsReview).map(e => e.id),
         pending_clock: { start: this.pendingStart(contractor.id)?.source.created_at ?? null, timezone: this.pendingStart(contractor.id)?.timezone ?? null, unmatched_stops: stops.length, messages: this.pendingClockMessagesForContractor(contractor.id).length,
           stops: stops.map(stop => ({ message_uid: stop.message.message_uid, created_at: stop.message.created_at,

@@ -18,11 +18,16 @@ Return only the participation decision. Never perform an action or explain your 
 export async function shouldParticipate(cfg: OpenClawConfig, account: Account, chat: Chat, message: Message, history: Message[], signal: AbortSignal): Promise<boolean> {
   const configured = cfg.agents?.entries?.main?.model ?? cfg.agents?.defaults?.model;
   const model = (typeof configured === "string" ? configured : configured?.primary) ?? "plow/anthropic/claude-sonnet-5";
-  const person = (value: Message["sender"]) => value.type === "member"
-    ? { name: value.display_name, role: value.role, handle: value.provider_key }
+  // Roster members may have no handle; senders always do.
+  const person = (value: Chat["participants"][number]) => value.type === "member"
+    ? { name: value.display_name, role: value.role, ...(value.provider_key ? { handle: value.provider_key } : {}) }
     : { name: value.line.display_name, role: value.relationship === "self" ? "agent" : "other-agent" };
-  const reply = (value: Message) => ({ sender: person(value.sender), body: value.body,
-    ...(value.reply_to ? { replying_to: { sender: person(value.reply_to.sender), body: value.reply_to.body } } : {}) });
+  // Plow wraps a swipe-reply as { part_index, message } (MessageReplyResource).
+  const reply = (value: Message) => {
+    const quoted = value.reply_to?.message;
+    return { sender: person(value.sender), body: value.body,
+      ...(quoted ? { replying_to: { sender: person(quoted.sender), body: quoted.body } } : {}) };
+  };
   const recent = history.length ? history : (await request<Page<Message>>(account,
     `/chats/${encodeURIComponent(chat.uid)}/messages?limit=6&starting_after=${encodeURIComponent(message.uid)}`, undefined, signal)).data.reverse();
   const response = await request<unknown>(account, "/chat/completions", {

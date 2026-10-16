@@ -39,7 +39,7 @@ test("only the verified private owner turn can fetch the hours and OpenClaw URLs
   });
   for (const scenario of ["owner", "member", "owner-group", "web", "stale"] as const) {
     let tool: Tool | undefined;
-    entry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
+    entry.register({ registrationMode: "full", on() {}, runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
       registerTool(factory: (context: object) => Tool) {
         const candidate = factory({ config, sessionKey: scenario === "owner-group" ? "agent:main:plow:group:cht_home" : "agent:main:main",
           messageChannel: scenario === "web" ? "webchat" : "plow", agentAccountId: "chat", nativeChannelId: home.uid,

@@ -219,19 +219,39 @@ scoped to that person. Generic shell and filesystem tools are disabled. The
 agent reads its fixed [operating instructions](skill/SKILL.md) through the guide
 action instead of editing records directly.
 
-Time tracking and the web view need neither a connected Mac nor Google Sheets.
-Optional Sheets and wiki projections use the owner's Mac through
-[Latch](https://github.com/plow-pbc/latch), with a write and readback before a
-projection is marked current. Sheets API creation is not included; it needs
-backend OAuth permissions outside this repository. Work exports preserve the
-recorded descriptions. Structured invoice and payment profiles are stored
-separately from work entries.
+Time tracking and the web view need no Mac. Download a contractor's timesheet as
+TSV from the dashboard; exports keep the recorded descriptions. Structured invoice
+and payment profiles are stored separately from work entries.
+
+### On its own, every day
+
+Ours also writes without being asked, straight from the ledger and with no model
+call, so the numbers are always the recorded ones:
+
+- **A nudge for a forgotten clock.** When a contractor's clock has run for ten hours,
+  Ours asks in their group whether they're still working, between 8:00 and 21:00 their
+  time. One nudge per session.
+- **An evening summary for you.** At 19:00, your DM gets today's hours and value per
+  contractor, clocks still running, and anything waiting on you: a long session to
+  review, a finish without a start, an invoice ready for review. Days with nothing to
+  report send nothing. Say "stop the daily summary" to turn it off, or ask to move it to
+  your time zone.
+
+Each message is recorded before it is sent and never repeated, even after a restart
+or a failed delivery. `PLOW_HOURS_PROACTIVE=0` in the container turns both off.
 
 ## Install
 
-For a hosted installation, open [Ours on the Agent Index](https://aiworthusing.com/agent-index/ours)
-and use its setup flow. Once it is running, text your agent's line and start with
-the first contractor. Ask for the dashboard in your private conversation.
+One tap, nothing to host:
+
+1. Open [Ours on the Agent Index](https://aiworthusing.com/agent-index/ours) on your phone.
+2. Tap **Text this agent**. It opens a text to +1 628 246 3032 that says
+   `Set this up for me: aiworthusing.com/agent-index/ours`. Send it.
+3. Plow starts your own Ours on its own line. Text that line to add your first
+   contractor, and ask for the dashboard in the same private conversation.
+
+No Mac app is needed: time tracking, the ledger, the timesheet and the daily summary
+all run in the hosted agent.
 
 ### Run locally
 
@@ -293,11 +313,70 @@ protected copy of the key. Local backups cannot recover a lost host or volume;
 no off-host destination is configured automatically. Set
 `PLOW_HOURS_BACKUP_DIR` to use another mounted backup location.
 
+## Known limitations
+
+- **Payments stay manual.** Ours checks invoices against recorded hours and records
+  your approval. It never moves money and never marks an invoice paid.
+- **Delivery is acceptance, not receipt.** Plow confirms it accepted a group or
+  message request. Ours says so and never claims a contractor received or read it.
+- **Group attention is a model decision.** In a contractor's group, a short
+  classification decides whether a message is for Ours. Clock shortcuts
+  (`/in`, `/out`, `start`, `stop` and the Portuguese `comecei`, `parei`) skip it. A misjudged message can be repeated,
+  and recorded clocks always come from the verified message, not the model.
+- **One owner per volume.** The ledger is bound to the first Plow owner and line that
+  boot it. Another account needs a fresh volume.
+- **Backups stay on the host.** Encrypted daily snapshots are local. Copying them
+  off the host is up to you.
+- **No spreadsheet sync.** Download the TSV from the dashboard. Earlier versions
+  offered Sheets and wiki copies through the owner's Mac, but owner turns in this
+  version can't reach Latch tools, so that path was unreachable and is no longer offered.
+- **Proactive timing is fixed.** The clock nudge comes after ten hours of an open clock;
+  the summary comes at 19:00 in its time zone (São Paulo unless you move it).
+- **USD rates, no conversion.** Hourly rates and recorded values are in US dollars.
+  A Brazilian invoice in reais is checked against the BRL amount you set when closing
+  the period; Ours does not convert currencies.
+
 ## Develop and validate
 
-The [image workflow](.github/workflows/image.yml) builds the pinned base, tests
-the installed plugin and probes the actual gateway on native AMD64 and ARM64.
-Use Node.js 26 for development. To run the installed-image checks locally:
+The fastest check needs no Docker. It assembles the image's `/opt/plow` layout from
+the pinned base source exactly as the Dockerfile does, then runs the CI typecheck,
+the full image test suite and the repository contract
+([tests/repo-contract.test.mjs](tests/repo-contract.test.mjs)):
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm run check
+```
+
+It needs Node.js 24.16 or newer and Git, and clones the base once into `.cache/`
+(or set `OURS_BASE_SRC` to an existing clone of `plow-pbc/plow-openclaw-agent`).
+`node scripts/test-local.mjs tests/hours.test.ts` runs one file. It does not
+cover the base image's OS packages or the offline gateway probe, which need the
+image below. [REVIEW.md](REVIEW.md) lists what reviewers block on, and
+[checks/manual-scenarios.md](checks/manual-scenarios.md) is the real-line pass
+before a release.
+
+### Bumping the base image
+
+1. Pick a published `base-<sha>` tag of
+   [plow-openclaw-agent](https://gallery.ecr.aws/e1h7x4a2/plow-cloud-agents) and read its
+   commits since the current pin, especially `plugin/index.ts`, `plugin/transport.ts`,
+   `boot/main.ts`, `boot/config.ts` and `prompt/AGENTS.md`.
+2. Update `FROM` with the tag and its multi-arch index digest.
+3. Copy that commit's `prompt/AGENTS.md` and `boot/main.ts` to `tests/fixtures/base-AGENTS.md`
+   and `tests/fixtures/base-main.ts.txt`, and update `BASE_COMMIT`, `BASE_FIXTURE_SHA256` and
+   `BASE_MAIN_SHA256` in the contract test. A new base boot step fails the parity test until
+   `boot/preboot.ts` has it.
+4. Run `npm run check`. `install.mjs` fails loudly on any patch anchor the base moved;
+   re-anchor it to the new code rather than loosening the match.
+5. Run the image checks and the conversation evaluator below, then the manual
+   scenarios on a real line.
+
+### Image checks
+
+The [image workflow](.github/workflows/image.yml) checks the repository contract,
+builds the pinned base, tests the installed plugin and probes the actual gateway on
+native AMD64 and ARM64 with Node.js 26. To run the installed-image checks locally:
 
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund

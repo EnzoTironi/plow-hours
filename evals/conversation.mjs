@@ -1201,7 +1201,8 @@ try {
     await quiet(owner, 'Pueblo, pode registrar suas horas aqui quando começar?');
     await quiet(alex, 'Enzo, pode conferir minhas horas depois?');
     const originalQuestion = messages.get(groupUid).find(m => m.uid === question.message_uid);
-    await quiet(alex, 'Sim, consigo.', originalQuestion);
+    // Plow's MessageReplyResource wraps the replied-to message.
+    await quiet(alex, 'Sim, consigo.', { part_index: null, message: originalQuestion });
     const ownerDashboard = await say(owner, groupUid, 'Alder, me envie o dashboard das horas e um resumo do Pueblo.');
     check('Alder answers an addressed owner request only in their private DM', () => {
       privateOwnerReply(ownerDashboard, groupUid);

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
-import { HoursLedger } from "../plugin/hours.ts";
+import { HoursLedger, localTime } from "../plugin/hours.ts";
 import { hoursWebSnapshot } from "../plugin/hours-web.ts";
 
 function fixture(t: TestContext) {
@@ -473,4 +473,20 @@ test("partial corrections preserve closed endpoints and reject invalid open corr
     assert.throws(() => f.ledger.manage({ action: "correct", entry_id: open.id, start, reason: "Invalid correction" }, start), /overlaps|future/);
     assert.deepEqual(f.report(), snapshot);
   }
+});
+
+test("the owner report names voided entries and how to restore them, so no one reads 'not clocked in' (#32)", t => {
+  const f = fixture(t);
+  f.ledger.clock(f.source("enzo-start", "15:18"), { kind: "start", detail: "landing" });
+  const id = f.report().open_entry!.id;
+  f.ledger.manage({ action: "void", entry_id: id, reason: "Owner asked to move the start to 9:00" }, "void-to-move");
+  const voided = f.report();
+  assert.equal(voided.open_entry, null);
+  assert.deepEqual(voided.voided_entries, [{ entry_id: id, start: localTime(Date.parse("2026-10-02T15:18:00Z"), "UTC"), finish: null,
+    reason: "Owner asked to move the start to 9:00", restore: `plow_hours correct with entry_id ${id} and restore=true, optionally with the right start` }]);
+  f.ledger.manage({ action: "correct", entry_id: id, start: "2026-10-02T09:00:00Z", reason: "Restore with the start the owner gave", restore: true }, "restore");
+  const restored = f.report();
+  assert.deepEqual(restored.voided_entries, []);
+  assert.equal(restored.open_entry?.id, id);
+  assert.equal(restored.open_entry?.start_ms, Date.parse("2026-10-02T09:00:00Z"));
 });

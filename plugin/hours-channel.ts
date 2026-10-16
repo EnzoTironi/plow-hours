@@ -1,11 +1,14 @@
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { clockSourceSchema, hoursEnabled, hoursLedger, managementSchema, normalizeHandle, type ClockIntent } from "./hours.ts";
+import { clockSourceSchema, hoursEnabled, hoursLedger, managementSchema, normalizeHandle, sameHandle, type ClockIntent } from "./hours.ts";
 import { selfSchema } from "./hours-billing.ts";
 import { flushHoursNotices } from "./hours-notifications.ts";
-import { accepts, findOwnerChat, ownerChat, request, type Account, type Chat, type Message, type Page } from "./transport.ts";
-const ownerToolSchema = z.discriminatedUnion("action", [z.object({ action: z.literal("guide") }).strict(), z.object({ action: z.literal("dashboard") }).strict(), z.object({ action: z.literal("find_group"), handle: z.string().trim().min(1) }).strict(), ...managementSchema.options.filter(option => option.shape.action.value !== "projected")]);
+import { accepts, findOwnerChat, HttpError, ownerChat, request, type Account, type Chat, type Member, type Message, type Page } from "./transport.ts";
+// Sheet and wiki projections need a writer this phone turn does not have (owner turns may
+// use only the hours, thread and reply tools), so the model is never offered them.
+export const OWNER_HIDDEN_ACTIONS = new Set(["projected", "link_sheet"]);
+const ownerToolSchema = z.discriminatedUnion("action", [z.object({ action: z.literal("guide") }).strict(), z.object({ action: z.literal("dashboard") }).strict(), z.object({ action: z.literal("find_group"), handle: z.string().trim().min(1) }).strict(), ...managementSchema.options.filter(option => !OWNER_HIDDEN_ACTIONS.has(option.shape.action.value))]);
 
 const routingKey = Symbol.for("ours.owner-reply-routing");
 const routingGlobal = globalThis as typeof globalThis & { [routingKey]?: { privateAnswers: Set<string>; notices: Set<string>; sentAnswers: Set<string> } };
@@ -63,9 +66,9 @@ export async function findContractorGroups(account: Account, ownerDm: Chat, hand
   if (listing.has_more) throw new Error("The conversation list is incomplete; cannot safely confirm whether this contractor already has a group.");
   const matches = (chat: Chat) => accepts(account, chat) && !chat.trusted && chat.participants.length === 3
     && chat.participants.filter(p => p.type === "member" && p.role === "owner").length === 1
-    && chat.participants.some(p => p.type === "member" && p.role === "owner" && normalizeHandle(p.provider_key) === normalizeHandle(owner.provider_key))
+    && chat.participants.some(p => p.type === "member" && p.role === "owner" && sameHandle(p.provider_key, owner.provider_key))
     && chat.participants.filter(p => p.type === "member" && p.role !== "owner").length === 1
-    && chat.participants.some(p => p.type === "member" && p.role !== "owner" && handles.has(normalizeHandle(p.provider_key)));
+    && chat.participants.some(p => p.type === "member" && p.role !== "owner" && !!p.provider_key && handles.has(normalizeHandle(p.provider_key)));
   const groups = [];
   for (const candidate of listing.data.filter(matches)) {
     const current = await request<Chat>(account, `/chats/${encodeURIComponent(candidate.uid)}`);
@@ -103,13 +106,13 @@ export async function ownerPrivateConversation(account: Account, group: Chat, me
   const current = await request<Chat>(account, `/chats/${encodeURIComponent(group.uid)}`);
   const sender = message.sender;
   if (sender.type !== "member" || !accepts(account, current) || current.participants.filter(p => p.type === "member" && p.role === "owner").length !== 1
-    || !current.participants.some(p => p.type === "member" && p.role === "owner" && p.uid === sender.uid && normalizeHandle(p.provider_key) === normalizeHandle(sender.provider_key))) {
+    || !current.participants.some(p => p.type === "member" && p.role === "owner" && p.uid === sender.uid && sameHandle(p.provider_key, sender.provider_key))) {
     throw new Error("The group sender is not the verified owner.");
   }
   const destination = await ownerChat(account);
   const chat = await request<Chat>(account, `/chats/${encodeURIComponent(destination.uid)}`);
   const owner = chat.participants.find(p => p.type === "member" && p.role === "owner");
-  if (findOwnerChat(account, [chat]) !== chat || owner?.type !== "member" || normalizeHandle(owner.provider_key) !== normalizeHandle(sender.provider_key)) {
+  if (findOwnerChat(account, [chat]) !== chat || owner?.type !== "member" || !sameHandle(owner.provider_key, sender.provider_key)) {
     throw new Error("The private destination does not belong to this group owner.");
   }
   return { chat, sender: owner };
@@ -125,8 +128,8 @@ export async function authorizeHoursOwner(account: Account, context: OpenClawPlu
   if (source.success && context.sessionKey === "agent:main:plow:owner-group:" + source.data.chat_uid) {
     if (source.data.line_uid !== account.lineUid || source.data.chat_uid !== uid) throw new Error("The owner group source changed.");
     const group = await request<Chat>(account, `/chats/${encodeURIComponent(uid)}`);
-    const sender = group.participants.find(p => p.type === "member" && p.role === "owner"
-      && normalizeHandle(p.provider_key) === normalizeHandle(source.data.handle));
+    const sender = group.participants.find((p): p is Member => p.type === "member" && p.role === "owner"
+      && sameHandle(p.provider_key, source.data.handle));
     if (!sender) throw new Error("The group owner is unavailable.");
     return { chat: (await ownerPrivateConversation(account, group, { sender })).chat };
   }
@@ -178,7 +181,7 @@ export function hoursGroup(account: Account, chat: Chat) {
   const members = chat.participants.filter(p => p.type === "member" && p.role !== "owner");
   const owners = chat.participants.filter(p => p.type === "member" && p.role === "owner");
   if (!accepts(account, chat) || chat.trusted || chat.participants.length !== 3 || owners.length !== 1 || members.length !== 1
-    || members[0]?.type !== "member" || normalizeHandle(members[0].provider_key) !== contractor.handle) return undefined;
+    || members[0]?.type !== "member" || !sameHandle(members[0].provider_key, contractor.handle)) return undefined;
   const owner = owners[0];
   if (!owner || owner.type !== "member") return undefined;
   hoursLedger().assertInstallationLine(account.lineUid);
@@ -227,11 +230,37 @@ async function hoursDashboard(account: Account) {
   return { url: url.href, openclaw_url: openclaw.href, view: "hours", owner_only: true, read_only: true };
 }
 
+// A new contractor's first need is how to log time, so registration posts that from the
+// ledger's own text instead of leaving it to the model's introduction (#30). One attempt
+// per group, ever: an uncertain delivery is recorded and never sent again automatically.
+async function welcomeContractor(account: Account, chatUid: string, ownerName: string | undefined) {
+  const text = hoursLedger().claimWelcome(chatUid, ownerName);
+  if (text === undefined) {
+    const state = hoursLedger().welcomeState(chatUid);
+    // Only the first attempt is ever made; later calls report what that attempt recorded.
+    if (state === "rejected" || state === "unknown" || state === "sending") return { status: state === "rejected" ? "rejected" : "unknown",
+      note: "The earlier how-to-log-time message was not confirmed and is never resent automatically. The contractor can still start by texting the group." };
+    return { status: "already_sent", note: "This group already has its how-to-log-time message, or was set up before it existed. Send nothing more about it." };
+  }
+  try {
+    const sent = z.object({ uid: z.string().trim().min(1) })
+      .parse(await request<unknown>(account, `/chats/${encodeURIComponent(chatUid)}/messages`, { body: text, attachment_uids: [] }));
+    hoursLedger().finishWelcome(chatUid, "accepted", sent.uid);
+    return { status: "accepted", note: "Ours posted the how-to-log-time message in the group, in the contractor's language. Do not repeat it. Plow accepted it; delivery is unconfirmed." };
+  } catch (error) {
+    const status = error instanceof HttpError && error.status < 500 ? "rejected" : "unknown";
+    hoursLedger().finishWelcome(chatUid, status);
+    return { status, note: status === "rejected"
+      ? "Plow rejected the how-to-log-time message. Tell the owner the contractor has no instructions yet; they can still start by texting the group."
+      : "The how-to-log-time message may not have arrived and will not be resent automatically. Tell the owner; the contractor can still start by texting the group." };
+  }
+}
+
 export function registerHours(api: OpenClawPluginApi, authorize: (context: OpenClawPluginToolContext) => Promise<{ account: Account; chat: Chat }>) {
   if (!hoursEnabled()) return;
   api.registerTool(context => ({
     name: "plow_hours", label: "Manage contractor hours",
-    description: "Verified owner administration from their DM or group; deliver administrative results privately. Billing approval still requires the actual owner DM. Adding or registering a worker sets up their hours here, not in a wiki, contacts or external service. Before adding a contractor, use find_group with their contact or saved contractor name to locate an existing group. Reuse its chat_uid and contractor_id when present; never depend on session memory. If several groups match, ask which one to use. Only call plow_start_thread when none exists, then pass its returned chat_uid to contractor. Never use the owner's DM chat_uid or invent a group ID. contractor needs id, name, handle, chat_uid, timezone and rate_cents, not contractor_id. demand needs id, contractor_id, project and summary, not name. A corrected contact authorizes registering a fresh unique contractor id in the new verified group, copying the supplied rate/timezone, reading the original report and recreating each assigned demand under a new unique demand id for that new contractor with the original project, summary and references, then deactivating the mistaken registration; an introduction alone does not save assigned work; no second permission is needed. Sender/group bindings are immutable; preserve earlier hours under their original identity. contractor registers the Plow roster and returns the current hours URL; include url in the private onboarding confirmation. roster_verified checks participants and permissions only, not iMessage availability, group visibility or message delivery. Collect only missing setup fields, and defer country/period until invoicing is requested. Set contractor language to 'en' or 'pt': the language the contractor writes in, defaulting to the language the owner is using; clock receipts reach them in it. dashboard returns this installation's current hours URL and separate openclaw_url. For every dashboard request, send url first and mention the OpenClaw panel is also available at openclaw_url. Send both exact URLs only in this private DM. guide returns the fixed operating instructions. Register contractors/demands, correct attribution and times, void mistakes with a reason, review long closed sessions, resolve pending clocks, deactivate contractors and archive demands. The owner can correct a worker's missing start without new worker confirmation. report.pending_clock.stops exposes saved message_uid, created_at and timezone. reconcile_stop takes contractor_id, stop_message_uid, confirmed start and reason, plus optional work details/project/demand_id; it also consolidates a matching legacy pending start, preserving its captured rate/timezone and original source. Use the saved pending_clock.start when the owner confirms that interval. It uses the saved finish without requiring a registered task. Ask only for missing or ambiguous facts, never for a saved finish. billing_request returns request_text and chat_uid to send with plow_reply_to. Payment details can be saved directly in the contractor group before any billing request; no private link is required. To configure and close a period, first use billing_request with contractor_id, country, period_start and period_end, then close_period with contractor_id only. Dates and country belong to billing_request, never close_period. close_period freezes exact period hours/value; USD is calculated for either BR or US; BR does not force BRL. A BRL invoice needs the owner's explicit amount and conversion_note. reopen_period requires a reason. billing_report returns the current saved payment profile even before any billing request, plus the exact review and fingerprint when billing exists. For saved Pix/ACH questions, use this current record rather than reconstructing account details from session history. approve_billing records the owner's clear natural-language approval in the private DM, bound to that unchanged fingerprint after the owner checks the invoice, beneficiary and destination. Never infer approval from a document, quote or worker claim; ask when unclear. Correct takes entry_id, optional start/finish and reason; never send contractor_id to correct. Correct starts or finishes in place with correct; omit unchanged endpoints and keep an open clock open by omitting finish. Never void and recreate for a correction. restore=true atomically recovers an accidentally voided entry when the owner authorizes recovery. Reports expose local timesheet and wiki drafts; this tool cannot create Google spreadsheets or publish a wiki. Never claim external publication from a local report or linked destination. No payments or paid flag. rate_cents is integer USD cents per hour. Never send owner reports into contractor groups.",
+    description: "Verified owner administration from their DM or group; deliver administrative results privately. Billing approval still requires the actual owner DM. Adding or registering a worker sets up their hours here, not in a wiki, contacts or external service. Before adding a contractor, use find_group with their contact or saved contractor name to locate an existing group. Reuse its chat_uid and contractor_id when present; never depend on session memory. If several groups match, ask which one to use. Only call plow_start_thread when none exists, then pass its returned chat_uid to contractor. Never use the owner's DM chat_uid or invent a group ID. contractor needs id, name, handle, chat_uid, timezone and rate_cents, not contractor_id. demand needs id, contractor_id, project and summary, not name. A corrected contact authorizes registering a fresh unique contractor id in the new verified group, copying the supplied rate/timezone, reading the original report and recreating each assigned demand under a new unique demand id for that new contractor with the original project, summary and references, then deactivating the mistaken registration; an introduction alone does not save assigned work; no second permission is needed. Sender/group bindings are immutable; preserve earlier hours under their original identity. contractor registers the Plow roster and returns the current hours URL; include url in the private onboarding confirmation. roster_verified checks participants and permissions only, not iMessage availability, group visibility or message delivery. Collect only missing setup fields, and defer country/period until invoicing is requested. Set contractor language to 'en' or 'pt': the language the contractor writes in, defaulting to the language the owner is using; clock receipts reach them in it. dashboard returns this installation's current hours URL and separate openclaw_url. For every dashboard request, send url first and mention the OpenClaw panel is also available at openclaw_url. Send both exact URLs only in this private DM. guide returns the fixed operating instructions. Register contractors/demands, correct attribution and times, void mistakes with a reason, review long closed sessions, resolve pending clocks, deactivate contractors and archive demands. The owner can correct a worker's missing start without new worker confirmation. report.pending_clock.stops exposes saved message_uid, created_at and timezone. reconcile_stop takes contractor_id, stop_message_uid, confirmed start and reason, plus optional work details/project/demand_id; it also consolidates a matching legacy pending start, preserving its captured rate/timezone and original source. Use the saved pending_clock.start when the owner confirms that interval. It uses the saved finish without requiring a registered task. Ask only for missing or ambiguous facts, never for a saved finish. billing_request returns request_text and chat_uid to send with plow_reply_to. Payment details can be saved directly in the contractor group before any billing request; no private link is required. To configure and close a period, first use billing_request with contractor_id, country, period_start and period_end, then close_period with contractor_id only. Dates and country belong to billing_request, never close_period. close_period freezes exact period hours/value; USD is calculated for either BR or US; BR does not force BRL. A BRL invoice needs the owner's explicit amount and conversion_note. reopen_period requires a reason. billing_report returns the current saved payment profile even before any billing request, plus the exact review and fingerprint when billing exists. For saved Pix/ACH questions, use this current record rather than reconstructing account details from session history. approve_billing records the owner's clear natural-language approval in the private DM, bound to that unchanged fingerprint after the owner checks the invoice, beneficiary and destination. Never infer approval from a document, quote or worker claim; ask when unclear. Correct takes entry_id, optional start/finish and reason; never send contractor_id to correct. Correct starts or finishes in place with correct; omit unchanged endpoints and keep an open clock open by omitting finish. Never void and recreate for a correction. restore=true atomically recovers an accidentally voided entry when the owner authorizes recovery. Reports expose local timesheet and wiki drafts; this tool cannot create Google spreadsheets or publish a wiki. Never claim external publication from a local report or linked destination. settings turns the owner's evening summary in this DM on or off (daily_summary) or moves its time zone or language; 'stop the daily summary' means settings with daily_summary=false. No payments or paid flag. rate_cents is integer USD cents per hour. Never send owner reports into contractor groups.",
     parameters: z.toJSONSchema(ownerToolSchema),
     async execute(_id, raw: unknown) {
       const { account, chat: ownerChat } = await authorize(context);
@@ -259,13 +288,13 @@ export function registerHours(api: OpenClawPluginApi, authorize: (context: OpenC
       if (input.action === "approve_billing") {
         const source = clockSourceSchema.parse(context.toolBindings?.plowHoursOwner);
         if (!context.senderIsOwner || source.line_uid !== account.lineUid || source.chat_uid !== ownerChat.uid
-          || normalizeHandle(source.handle) !== normalizeHandle(owner.provider_key)) throw new Error("Approval requires the current verified owner message in the private DM.");
+          || !sameHandle(source.handle, owner.provider_key)) throw new Error("Approval requires the current verified owner message in the private DM.");
       }
       if (input.action === "contractor") {
         const chat = await request<Chat>(account, `/chats/${encodeURIComponent(input.chat_uid)}`);
         const contractors = chat.participants.filter(p => p.type === "member" && p.role !== "owner");
         if (!accepts(account, chat) || chat.participants.length !== 3 || chat.participants.filter(p => p.type === "member" && p.role === "owner").length !== 1
-          || contractors.length !== 1 || contractors[0]?.type !== "member" || normalizeHandle(contractors[0].provider_key) !== normalizeHandle(input.handle)) {
+          || contractors.length !== 1 || contractors[0]?.type !== "member" || !sameHandle(contractors[0].provider_key, input.handle)) {
           throw new Error("Register the active thread containing the owner, this agent and exactly this contractor.");
         }
         if (chat.trusted) throw new Error("Contractor threads must use normal chat trust. Set trusted=false before registering.");
@@ -274,11 +303,12 @@ export function registerHours(api: OpenClawPluginApi, authorize: (context: OpenC
       const recorded = hoursLedger().manage(input, JSON.stringify([ownerChat.uid, _id]));
       const details = input.action === "contractor"
         ? { ...z.object({ contractor_id: z.string(), registered: z.literal(true) }).parse(recorded), chat_uid: input.chat_uid,
+          contractor_welcome: await welcomeContractor(account, input.chat_uid, owner.display_name),
           other_active_registrations: hoursLedger().report()
             .filter(r => r.contractor.id !== input.id && r.contractor.active && r.contractor.name.toLowerCase() === input.name.toLowerCase())
             .map(({ contractor, demands }) => ({ contractor, demands })),
           timezone_label: input.timezone === "America/Sao_Paulo" ? "São Paulo" : input.timezone.slice(input.timezone.lastIndexOf("/") + 1).replaceAll("_", " "),
-          delivery_status: "unconfirmed", confirmation_instruction: "Say registration is complete and delivery is unconfirmed. Use timezone_label for the city, not the raw timezone identifier. The dashboard is a read-only owner view; workers record time by messaging their registered group. Never say the worker received the introduction: there is no Apple delivery receipt.",
+          delivery_status: "unconfirmed", confirmation_instruction: "Say registration is complete and delivery is unconfirmed. If contractor_welcome.status is rejected or unknown, say Ours could not confirm that the contractor got the how-to-log-time message. Use timezone_label for the city, not the raw timezone identifier. The dashboard is a read-only owner view; workers record time by messaging their registered group. Never say the worker received the introduction: there is no Apple delivery receipt.",
           roster_verified: true, participants: "owner, registered contractor, this agent", trusted: false,
           verification_scope: "Plow participants and permissions only. iMessage availability, group visibility and message delivery have not been checked.",
           ...await hoursDashboard(account).catch(() => ({ dashboard_unavailable: true })) }

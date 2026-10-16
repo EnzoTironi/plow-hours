@@ -4,8 +4,8 @@ import { z } from "zod";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import entry from "./ours-entry.ts";
-import { hoursLedger } from "../plugin/hours.ts";
-import { clearOwnerAnswer, ownerAnswerIsPrivate, ownerAnswerWasSent, findContractorGroups, ownerPrivateConversation } from "../plugin/hours-channel.ts";
+import { HoursLedger, hoursLedger, sameHandle } from "../plugin/hours.ts";
+import { clearOwnerAnswer, ownerAnswerIsPrivate, ownerAnswerWasSent, findContractorGroups, hoursGroup, ownerPrivateConversation } from "../plugin/hours-channel.ts";
 import { DeliveryUnknownError, HttpError } from "../plugin/transport.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
@@ -79,7 +79,7 @@ test("an owner group turn keeps its native source and reply destination in the g
   const account = { apiBase, accountId: "chat", lineUid: "line", threadTrust: "untrusted" };
   const cfg = { agents: { entries: { main: { identity: { name: "Alder" } } } }, channels: { plow: account } };
   let channel: { gateway: { startAccount: (value: object) => Promise<void> } } | undefined;
-  entry.register({ registrationMode: "full", logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
+  entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: { routing: { resolveAgentRoute }, session: { resolveStorePath, updateLastRoute }, inbound: {
       buildContext(raw: unknown) { seen = contextSchema.parse(raw); return { SessionKey: seen.route.sessionKey }; },
@@ -117,7 +117,7 @@ function ownerTools(senderIsOwner = true, overrides: object = {}) {
     channels: { plow: { apiBase: "http://fixture", accountId: "chat", lineUid: "line", threadTrust: "untrusted" } },
     plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } },
   };
-  entry.register({ registrationMode: "full", logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
+  entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
     runtime: { channel: { routing: { resolveAgentRoute }, session: { resolveStorePath, updateLastRoute } } },
     registerTool(factory: (context: object) => Tool) {
       const tool = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat",
@@ -302,7 +302,7 @@ test("the shared channel sender rejects tool protocol while preserving ordinary 
   await websocketFixture(t);
   const cfg = { channels: { plow: { apiBase: "http://fixture", accountId: "chat", lineUid: "line" } } };
   let outbound: { sendText(ctx: { cfg: object; to: string; text: string; accountId: string }): Promise<unknown> } | undefined;
-  entry.register({ registrationMode: "full", logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
+  entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
     registerChannel(value: { plugin: { outbound: typeof outbound } }) { outbound = value.plugin.outbound; },
   });
   assert.ok(outbound);
@@ -572,4 +572,114 @@ test("owner model cannot acknowledge external publication without a writing inte
     action: "projected", contractor_id: "alex", target: "wiki", revision: 1,
   }));
   assert.deepEqual(hoursLedger().report(), before);
+});
+
+test("a new contractor's group gets one how-to-log-time message in their language, never resent (#30)", async t => {
+  await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  const ptWorker = { ...worker, uid: "bia", display_name: "Bia", provider_key: "bia@example.test" };
+  const ptGroup = { ...group, uid: "cht_bia", participants: [owner, ptWorker, self] };
+  const failWorker = { ...worker, uid: "cid", display_name: "Cid", provider_key: "cid@example.test" };
+  const failGroup = { ...group, uid: "cht_cid", participants: [owner, failWorker, self] };
+  const posts: { chat: string; body: string }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    const path = new URL(url).pathname;
+    const posted = path.match(/^\/v1\/chats\/([^/]+)\/messages$/);
+    if (posted && init.method === "POST") {
+      posts.push({ chat: posted[1]!, body: JSON.parse(String(init.body)).body });
+      return posted[1] === failGroup.uid ? new Response("unavailable", { status: 503 }) : Response.json({ uid: `msg_${posts.length}` });
+    }
+    for (const chat of [home, group, ptGroup, failGroup]) if (path.endsWith(`/${chat.uid}`)) return Response.json(chat);
+    if (path.endsWith("/agents/me")) return Response.json({ agent: { web_url: "https://hours.example.test" } });
+    assert.fail("Unexpected provider request: " + url);
+  });
+  const tool = ownerTools()("plow_hours");
+  const welcome = z.object({ details: z.object({ contractor_welcome: z.object({ status: z.string(), note: z.string() }) }).passthrough() });
+  const register = async (id: string, args: object) => welcome.parse(await tool.execute(id, { action: "contractor", timezone: "America/New_York", rate_cents: 2000, ...args })).details.contractor_welcome;
+
+  const alex = { id: "alex", name: "Alex", handle: worker.provider_key, chat_uid: group.uid, language: "en" };
+  assert.equal((await register("r1", alex)).status, "accepted");
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0]!.chat, group.uid, "The welcome goes to the contractor's group, never the owner DM");
+  assert.match(posts[0]!.body, /Alex/); assert.match(posts[0]!.body, /Dane/);
+  assert.match(posts[0]!.body, /\/in\b/); assert.match(posts[0]!.body, /\/out\b/);
+  assert.doesNotMatch(posts[0]!.body, /shortly|later|soon/i, "It promises no further message");
+
+  assert.equal((await register("r1", alex)).status, "already_sent", "A replayed call sends nothing");
+  assert.equal((await register("r2", { ...alex, rate_cents: 2500 })).status, "already_sent", "Updating a registration sends nothing");
+  assert.equal(posts.length, 1);
+
+  assert.equal((await register("r3", { id: "bia", name: "Bia", handle: ptWorker.provider_key, chat_uid: ptGroup.uid, language: "pt" })).status, "accepted");
+  assert.match(posts[1]!.body, /Bia/); assert.match(posts[1]!.body, /horas/); assert.match(posts[1]!.body, /\/in\b/);
+
+  assert.equal((await register("r4", { id: "cid", name: "Cid", handle: failWorker.provider_key, chat_uid: failGroup.uid })).status, "unknown");
+  assert.equal((await register("r5", { id: "cid", name: "Cid", handle: failWorker.provider_key, chat_uid: failGroup.uid, rate_cents: 3000 })).status, "unknown",
+    "An uncertain welcome is never sent again automatically");
+  assert.equal(posts.filter(post => post.chat === failGroup.uid).length, 1);
+});
+
+test("contractors registered before the welcome existed are never welcomed after an upgrade (#30)", async t => {
+  await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  // A volume from before this release: a registered contractor and no welcome records.
+  const directory = `${process.env.OPENCLAW_STATE_DIR}/plow-hours`;
+  const legacy = new HoursLedger(directory);
+  legacy.manage({ action: "contractor", id: "alex", name: "Alex", handle: worker.provider_key, chat_uid: group.uid, timezone: "America/New_York", rate_cents: 2000 }, "pre-upgrade");
+  legacy.close();
+  const { DatabaseSync } = await import("node:sqlite");
+  const raw = new DatabaseSync(`${directory}/hours.sqlite`);
+  raw.exec("DROP TABLE group_welcomes");
+  raw.close();
+  const posts: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit = {}) => {
+    if (init.method === "POST") { posts.push(url); return Response.json({ uid: "msg" }); }
+    if (url.endsWith(home.uid)) return Response.json(home);
+    if (url.endsWith(group.uid)) return Response.json(group);
+    if (url.endsWith("/agents/me")) return Response.json({ agent: { web_url: "https://hours.example.test" } });
+    assert.fail("Unexpected provider request: " + url);
+  });
+  z.object({ details: z.object({ contractor_welcome: z.object({ status: z.literal("already_sent") }) }).passthrough() })
+    .parse(await ownerTools()("plow_hours").execute("after-upgrade", { action: "contractor", id: "alex", name: "Alex", handle: worker.provider_key, chat_uid: group.uid, timezone: "America/New_York", rate_cents: 2600 }));
+  assert.deepEqual(posts, [], "An upgraded volume never welcomes a contractor it already had");
+  assert.equal(hoursLedger().report("alex")[0]?.contractor.rate_cents, 2600, "The update itself still applies");
+});
+
+test("a roster member without a handle matches no one: owner and contractor checks refuse instead of crashing", async t => {
+  await websocketFixture(t);
+  assert.equal(sameHandle(" +1 (555) 000-0001 ", "+15550000001"), true);
+  assert.equal(sameHandle("Alex@Example.test", "alex@example.test"), true);
+  for (const [a, b] of [[null, null], [undefined, "x@example.test"], ["", ""], ["  ", "  "], ["+15550000001", null]] as const) assert.equal(sameHandle(a, b), false);
+  hoursLedger().manage({ action: "contractor", id: "alex", name: "Alex", handle: worker.provider_key, chat_uid: group.uid, timezone: "UTC", rate_cents: 2000 }, "register");
+  const account = { accountId: "chat", apiBase: "http://fixture", lineUid: "line" };
+  const hiddenWorker = { ...worker, provider_key: null };
+  assert.equal(hoursGroup(account, { ...group, participants: [owner, hiddenWorker, self] } as never), undefined,
+    "A contractor group whose worker has no handle is not treated as that contractor's group");
+  const hiddenOwnerGroup = { ...group, participants: [{ ...owner, provider_key: null }, worker, self] };
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith(group.uid)) return Response.json(hiddenOwnerGroup);
+    assert.fail("Unexpected provider request: " + url);
+  });
+  await assert.rejects(() => ownerPrivateConversation(account, hiddenOwnerGroup as never, { sender: owner } as never), /not the verified owner/);
+});
+
+test("a group set up before the welcome existed is never welcomed, even through a new registration in it (#30)", async t => {
+  await websocketFixture(t);
+  const directory = `${process.env.OPENCLAW_STATE_DIR}/plow-hours`;
+  const legacy = new HoursLedger(directory);
+  legacy.manage({ action: "contractor", id: "alex", name: "Alex", handle: worker.provider_key, chat_uid: group.uid, timezone: "UTC", rate_cents: 2000 }, "pre-upgrade");
+  legacy.close();
+  const { DatabaseSync } = await import("node:sqlite");
+  const raw = new DatabaseSync(`${directory}/hours.sqlite`);
+  raw.exec("DROP TABLE group_welcomes");
+  raw.close();
+  const upgraded = new HoursLedger(directory);
+  t.after(() => upgraded.close());
+  upgraded.manage({ action: "deactivate", contractor_id: "alex", reason: "Re-registering" }, "deactivate");
+  upgraded.manage({ action: "contractor", id: "alex-2", name: "Alex", handle: "alex.two@example.test", chat_uid: group.uid, timezone: "UTC", rate_cents: 2000 }, "new-registration");
+  assert.equal(upgraded.claimWelcome(group.uid, "Dane"), undefined);
+  assert.equal(upgraded.welcomeState(group.uid), "existing");
 });

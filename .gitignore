@@ -4,3 +4,6 @@
 .DS_Store
 work/
 /evidence/
+/.cache/
+.env
+.env.*

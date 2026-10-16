@@ -109,7 +109,7 @@ test("optional clock shortcuts commit and confirm without any model or Mac call"
   const account = { apiBase, accountId: "chat", lineUid: "line", threadTrust: "untrusted" };
   const cfg = { channels: { plow: account }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
   let channel: { gateway: { startAccount: (value: object) => Promise<void> } } | undefined;
-  entry.register({ registrationMode: "full", logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
+  entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, registerTool() {}, registerHttpRoute() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: {
       routing: { resolveAgentRoute: () => ({ agentId: "main", sessionKey: `agent:main:plow:group:${group.uid}` }) },
@@ -139,7 +139,7 @@ test("management requires the owner's main DM and a normal thread bound to the a
   for (const scenario of ["member", "owner-group", "wrong-handle", "trusted-room", "owner"] as const) {
     let tool: Tool | undefined;
     destination = { ...group, trusted: scenario === "trusted-room" };
-    entry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
+    entry.register({ registrationMode: "full", on() {}, runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
       registerTool(factory: (context: object) => Tool) {
         const candidate = factory({ config: cfg, sessionKey: scenario === "owner-group" ? "agent:main:plow:group:cht_ana" : "agent:main:main",
           messageChannel: "plow", agentAccountId: "chat", nativeChannelId: home.uid,
@@ -159,7 +159,7 @@ test("the base does not register the feature when its opt-in is absent", () => {
   delete process.env.PLOW_HOURS;
   const names: string[] = [];
   try {
-    entry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, registerChannel() {},
+    entry.register({ registrationMode: "full", on() {}, runtime: {}, logger: { info() {} }, registerChannel() {},
       registerTool(factory: (context: object) => Tool) { names.push(factory({}).name); },
     });
     assert.ok(!names.includes("plow_hours"));
@@ -182,7 +182,7 @@ test("the scoped tool binds both the live roster and sender; owner DM, another g
       : scenario === "expanded-group" ? { ...group, participants: [...group.participants, { ...contractor, uid: "other", provider_key: "+15550000003" }] }
       : { ...group, trusted: scenario === "trusted-group" };
     let tool: Tool | undefined;
-    entry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
+    entry.register({ registrationMode: "full", on() {}, runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
       registerTool(factory: (context: object) => Tool) {
         const candidate = factory({ config: cfg, sessionKey: scenario === "owner-dm" ? "agent:main:main" : `agent:main:plow:group:${served.uid}`,
           messageChannel: "plow", agentAccountId: "chat", nativeChannelId: served.uid,
@@ -230,7 +230,7 @@ test("natural clock tools bind the provider timestamp and message UID, never the
   t.mock.method(globalThis, "fetch", async () => Response.json(group));
   function clockTool(messageUid: string, createdAt: string, options: { owner?: boolean; handle?: string; stale?: boolean } = {}) {
     let tool: Tool | undefined;
-    entry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
+    entry.register({ registrationMode: "full", on() {}, runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
       registerTool(factory: (context: object) => Tool) {
         const candidate = factory({ config: cfg, sessionKey: `agent:main:plow:group:${group.uid}`, messageChannel: "plow", agentAccountId: "chat",
           nativeChannelId: group.uid, requesterSenderId: options.owner ? "plow-owner" : contractor.provider_key, senderIsOwner: Boolean(options.owner),
@@ -274,7 +274,7 @@ test("natural owner approval is scoped to the current private DM and exact revie
   t.mock.method(globalThis, "fetch", async () => Response.json(home));
   function tool(bindingHandle = owner.provider_key, bindingChat = home.uid) {
     let ownerTool: Tool | undefined;
-    entry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
+    entry.register({ registrationMode: "full", on() {}, runtime: {}, logger: { info() {} }, registerChannel() {}, registerHttpRoute() {},
       registerTool(factory: (context: object) => Tool) {
         const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: home.uid,
           requesterSenderId: "plow-owner", senderIsOwner: true, toolBindings: { plowHoursOwner: { line_uid: "line", chat_uid: bindingChat, handle: bindingHandle, message_uid: "approval", created_at: "2026-10-03T12:00:00Z", body: "I reviewed Ana's invoice and Pix instructions. Approve these USD 30 for her." } } });
@@ -294,4 +294,54 @@ test("natural owner approval is scoped to the current private DM and exact revie
   ledger.self({ action: "payment_details", payment: { method: "pix", beneficiary: "Ana New", document_url: "https://private.example.test/new.pdf" } }, "ana", "changed-pix");
   await assert.rejects(() => ownerTool.execute("stale-approval", approval), /changed/);
   assert.equal(ledger.billingReport("ana").approved, false);
+});
+
+test("burst debounce merges owner DM bubbles but never a contractor's clock messages, which stay one ordered turn each", async t => {
+  const { server, apiBase, abortAfter } = await websocketFixture(t);
+  const previous = process.env.PLOW_HOURS;
+  process.env.PLOW_HOURS = "1";
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_HOURS; else process.env.PLOW_HOURS = previous; });
+  hoursLedger().manage(profile, "profile");
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith("/ws/ticket")) return Response.json({ ticket: "fixture" });
+    if (path === "/v1/chats") return Response.json({ data: [home, group], has_more: false });
+    if (path.endsWith("/messages")) return Response.json({ data: [], has_more: false });
+    if (path.endsWith(`/${group.uid}`)) return Response.json(group);
+    if (path.endsWith(`/${home.uid}`)) return Response.json(home);
+    throw new Error(`Unexpected external call: ${path}`);
+  });
+  const frame = (chat: string, uid: string, body: string, sender: typeof owner, at: string) => JSON.stringify({ event_type: "message_received", event_id: uid, chat_id: chat,
+    data: { message: { uid, body, created_at: at, direction: "inbound", sender, attachments: [] } } });
+  let connectedAt = 0, firstContractorTurnAt = 0;
+  server.on("connection", (socket: { send: (text: string) => void }) => {
+    connectedAt = Date.now();
+    socket.send(frame(group.uid, "c1", "Starting the landing page now.", contractor, "2026-10-02T09:00:00-03:00"));
+    socket.send(frame(group.uid, "c2", "The checkout form, actually.", contractor, "2026-10-02T09:00:01-03:00"));
+    socket.send(frame(home.uid, "o1", "Add Alex to the website", owner, "2026-10-02T09:00:02-03:00"));
+    socket.send(frame(home.uid, "o2", "rate 40/h", owner, "2026-10-02T09:00:03-03:00"));
+  });
+  const controller = abortAfter(10_000);
+  const turns: { chat: string; uid: string; body: string }[] = [];
+  let active = 0, overlapped = false;
+  const account: Account = { apiBase, accountId: "chat", lineUid: "line", threadTrust: "untrusted" };
+  await listen(account, controller.signal, () => {}, async (chat, message, _first, _history, ingress) => {
+    if (chat.uid === group.uid && ++active > 1) overlapped = true;
+    if (chat.uid === group.uid) firstContractorTurnAt ||= Date.now();
+    ingress.onSubmitted();
+    await ingress.onAdopted();
+    // Admission alone must not release the contractor's next message.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    turns.push({ chat: chat.uid, uid: message.uid, body: message.body });
+    if (chat.uid === group.uid) active--;
+    if (turns.length === 3) setTimeout(() => controller.abort(), 20);
+    return "completed";
+  }, { messages: { inbound: { byChannel: { plow: 1000 } } } });
+  assert.deepEqual(turns.filter(turn => turn.chat === group.uid), [
+    { chat: group.uid, uid: "c1", body: "Starting the landing page now." },
+    { chat: group.uid, uid: "c2", body: "The checkout form, actually." },
+  ]);
+  assert.equal(overlapped, false, "A contractor's second message waits for the first turn's outcome");
+  assert.ok(firstContractorTurnAt - connectedAt < 500, "A clock message is not held for the debounce window");
+  assert.deepEqual(turns.filter(turn => turn.chat === home.uid), [{ chat: home.uid, uid: "o2", body: "Add Alex to the website\nrate 40/h" }]);
 });

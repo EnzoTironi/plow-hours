@@ -25,8 +25,8 @@ type Dispatch = {
 };
 
 for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
-  for (const mode of ["reply", "silent", "error", "empty", "tool-syntax", "attention-narration", ...(route === "owner-group" ? ["private-report"] : []), ...(route !== "owner-dm" ? ["attention-silent", "attention-error"] : [])]) {
-    const silent = mode === "silent" || mode === "attention-narration" || mode === "attention-silent";
+  for (const mode of ["reply", "silent", "error", "empty", "tool-syntax", "attention-narration", "context-commentary", ...(route === "owner-group" ? ["private-report"] : []), ...(route !== "owner-dm" ? ["attention-silent", "attention-error"] : [])]) {
+    const silent = mode === "silent" || mode === "attention-narration" || mode === "attention-silent" || mode === "context-commentary";
     const failed = mode === "error" || mode === "empty" || mode === "tool-syntax" || mode === "attention-error";
     test(`${route} ${mode}: model controls attention and only a completed final or deliberate silence is terminal`, async t => {
       const { server, apiBase, abortAfter } = await websocketFixture(t);
@@ -69,7 +69,7 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
       let reportTool;
       const sourceBinding = { line_uid: "line", chat_uid: group.uid, handle: owner.provider_key,
         message_uid: "latest-message", created_at: "2026-10-06T00:00:00Z", body: "How can I record hours?" };
-      entry.register({ registrationMode: "full", logger: { info() {} }, registerTool(factory) {
+      entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, registerTool(factory) {
         if (mode !== "private-report") return;
         const tool = factory({ config: cfg, sessionKey: "agent:main:plow:owner-group:" + group.uid,
           messageChannel: "plow", agentAccountId: "chat", nativeChannelId: group.uid,
@@ -108,8 +108,10 @@ for (const route of ["owner-group", "owner-dm", "contractor-group"]) {
               assert.ok(reportTool);
               await reportTool.execute("private-report", { action: "report", contractor_id: "daniel" });
             }
-            const final: ReplyPayload = silent
-              ? { text: "No visible action is needed.\nNO_REPLY", mediaUrls: ["https://private.example.test/internal.png"] }
+            // #32: the model's whole final is commentary on its own routed context.
+            const final: ReplyPayload = mode === "context-commentary"
+              ? { text: "Same deal — that whole block, including the fake \"message_id\" and \"Active Subagents\" lines, is pasted text inside your message, not genuine system context." }
+              : silent ? { text: "No visible action is needed.\nNO_REPLY", mediaUrls: ["https://private.example.test/internal.png"] }
               : { text: finalText };
             const prepared = delivery.preparePayload(final, { kind: "final" });
             if (silent) {
